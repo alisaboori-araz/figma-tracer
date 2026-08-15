@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- IMAGE_TRACER_LIBRARY -->
+    <style>
+      * { box-sizing: border-box; }
+      body { margin: 0; overflow: hidden; background: #2c2c2c; color: #f5f5f5; font: 12px Inter, Arial, sans-serif; }
+      .header { height: 38px; display: flex; align-items: center; padding: 0 16px; border-bottom: 1px solid #454545; font-weight: 700; }
+      .header::before { content: "◆"; color: #4da3ff; margin-right: 8px; font-size: 14px; }
+      .shell { display: grid; grid-template-columns: 284px 1fr; height: 602px; }
+      aside { overflow: auto; border-right: 1px solid #454545; background: #292929; }
+      .tabs { display: flex; padding: 0 20px; border-bottom: 1px solid #454545; }
+      .tab { height: 46px; margin-right: 20px; padding: 0 2px; border: 0; border-bottom: 2px solid transparent; color: #8d8d8d; background: transparent; font: inherit; font-weight: 700; cursor: pointer; }
+      .tab.active { border-bottom-color: #4c9aff; color: #fff; }
+      .section { padding: 18px 22px; border-bottom: 1px solid #454545; }
+      .section-title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; font-weight: 700; }
+      .reset { border: 0; padding: 0; background: none; color: #65b5ff; font: inherit; cursor: pointer; }
+      .field { margin-bottom: 14px; }
+      .field:last-child { margin-bottom: 0; }
+      .field-head, .check { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+      label { color: #f4f4f4; }
+      output { color: #fff; font-variant-numeric: tabular-nums; }
+      input[type="range"] { width: 100%; margin: 1px 0 0; accent-color: #4c9aff; }
+      input[type="checkbox"] { width: 14px; height: 14px; margin: 0; accent-color: #4c9aff; }
+      select { width: 100%; height: 28px; padding: 0 6px; color: #fff; border: 1px solid #505050; border-radius: 3px; background: #383838; font: inherit; }
+      .mode-panel[hidden] { display: none; }
+      .palette { display: flex; flex-wrap: wrap; gap: 8px; }
+      .swatch { position: relative; width: 30px; height: 30px; padding: 0; border: 1px solid #696969; border-radius: 4px; overflow: visible; background-color: #555; cursor: pointer; }
+      .swatch input { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; opacity: 0; cursor: pointer; }
+      .swatch-remove { position: absolute; top: -6px; right: -6px; display: flex; width: 15px; height: 15px; align-items: center; justify-content: center; border: 1px solid #777; border-radius: 50%; color: #fff; background: #444; font: 12px/1 Arial, sans-serif; cursor: pointer; }
+      .swatch-remove:disabled { display: none; }
+      details { margin-top: 2px; }
+      summary { color: #f4f4f4; cursor: pointer; user-select: none; }
+      details .advanced-fields { padding-top: 14px; }
+      .preview-controls { padding-bottom: 10px; }
+      .subtle { margin: -4px 0 0; color: #999; font-size: 11px; line-height: 1.4; }
+      .performance-warning { margin: 7px 0 0; color: #ffbd66; font-size: 11px; line-height: 1.4; }
+      .performance-warning[hidden] { display: none; }
+      .workspace { display: flex; flex-direction: column; min-width: 0; padding: 16px; background: #303030; }
+      .notice { display: flex; justify-content: space-between; align-items: center; min-height: 46px; margin-bottom: 16px; padding: 0 14px; border-radius: 4px; color: #dce6ff; background: #424b70; }
+      .notice small { color: #8fc3ff; }
+      .canvas-wrap { display: flex; flex: 1; min-height: 0; align-items: center; justify-content: center; overflow: hidden; padding: 12px; background-color: #3a3a3a; background-image: linear-gradient(45deg,#343434 25%,transparent 25%),linear-gradient(-45deg,#343434 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#343434 75%),linear-gradient(-45deg,transparent 75%,#343434 75%); background-size: 18px 18px; background-position: 0 0,0 9px,9px -9px,-9px 0; }
+      canvas { max-width: 100%; max-height: 100%; touch-action: none; background: transparent; box-shadow: 0 0 0 1px #171717; }
+      .footer { display: flex; align-items: center; justify-content: space-between; min-height: 70px; padding-top: 16px; }
+      #status { max-width: 230px; color: #ccc; line-height: 1.4; }
+      #status.error { color: #ff9b9b; }
+      #trace { height: 32px; padding: 0 14px; border: 0; border-radius: 5px; background: #4c9aff; color: #fff; font: inherit; font-weight: 700; cursor: pointer; }
+      #trace:disabled { opacity: .55; cursor: default; }
+    </style>
+  </head>
+  <body>
+    <div class="header">Image Tracer</div>
+    <div class="shell">
+      <aside>
+        <nav class="tabs"><button class="tab active" data-mode="bw">Black &amp; white</button><button class="tab" data-mode="color">Colour</button></nav>
+        <section class="section preview-controls">
+          <div class="section-title"><span>Preview</span><button id="reset" class="reset">Reset</button></div>
+          <div class="field"><select id="preview-mode"><option value="original">Original image</option><option value="processed">Processed image</option></select></div>
+          <div class="field check"><label for="show-path">Show path</label><input id="show-path" type="checkbox" checked /></div>
+          <div class="field check"><label for="show-points">Show points</label><input id="show-points" type="checkbox" checked /></div>
+          <div class="field check"><label for="fade-image">Fade image</label><input id="fade-image" type="checkbox" /></div>
+        </section>
+        <section class="section">
+          <div class="section-title"><span>Pre-processing</span></div>
+          <div id="bw-panel" class="mode-panel">
+            <div class="field check"><label for="invert">Invert image</label><input id="invert" type="checkbox" /></div>
+            <div class="field"><div class="field-head"><label for="blur">Blur</label><output id="blur-value">0</output></div><input id="blur" type="range" min="0" max="10" value="0" /></div>
+            <div class="field"><div class="field-head"><label for="threshold">Threshold</label><output id="threshold-value">128</output></div><input id="threshold" type="range" min="0" max="255" value="128" /></div>
+          </div>
+          <div id="color-panel" class="mode-panel" hidden>
+            <div class="field check"><label for="stack-colors">Stack colours</label><input id="stack-colors" type="checkbox" checked /></div>
+            <div class="field"><div class="field-head"><label for="colors">Number of colours</label><output id="colors-value">8</output></div><input id="colors" type="range" min="2" max="16" value="8" /></div>
+            <div class="field"><div class="field-head"><label>Palette</label><output id="palette-count">8 colours</output></div><div id="palette" class="palette" aria-label="Editable trace palette"></div></div>
+          </div>
+        </section>
+        <section class="section">
+          <div class="section-title"><span>Tracing</span></div>
+          <div id="bw-tracing-panel" class="mode-panel">
+            <div class="field"><div class="field-head"><label for="bw-ignore">Ignore less than</label><output id="bw-ignore-value">12</output></div><input id="bw-ignore" type="range" min="2" max="30" value="12" /></div>
+            <div class="field"><div class="field-head"><label for="bw-smoothness">Smoothness</label><output id="bw-smoothness-value">1.5</output></div><input id="bw-smoothness" type="range" min="1" max="40" value="15" /></div>
+            <div class="field"><div class="field-head"><label for="bw-curve">Curve optimisation</label><output id="bw-curve-value">1.5</output></div><input id="bw-curve" type="range" min="1" max="40" value="15" /></div>
+          </div>
+          <div id="color-tracing-panel" class="mode-panel" hidden>
+            <div class="field"><label for="detail">Detail</label><select id="detail"><option value="low">Low</option><option value="balanced" selected>Balanced</option><option value="high">High</option><option value="custom">Custom</option></select></div>
+            <div class="field"><div class="field-head"><label for="color-ignore">Speckle removal</label><output id="color-ignore-value">12</output></div><input id="color-ignore" type="range" min="2" max="30" value="12" /></div>
+            <details>
+              <summary>Advanced</summary>
+              <div class="advanced-fields">
+                <div class="field"><div class="field-head"><label for="color-smoothness">Smoothness</label><output id="color-smoothness-value">1.5</output></div><input id="color-smoothness" type="range" min="1" max="40" value="15" /></div>
+                <div class="field"><div class="field-head"><label for="color-curve">Curve optimisation</label><output id="color-curve-value">1.5</output></div><input id="color-curve" type="range" min="1" max="40" value="15" /></div>
+              </div>
+            </details>
+          </div>
+          <div class="field">
+            <div class="field-head"><label for="trace-scale-percent">Image resolution</label><output id="trace-resolution-value">50%</output></div>
+            <input id="trace-scale-percent" type="range" min="1" max="100" step="1" value="50" />
+            <p id="performance-warning" class="performance-warning" hidden>Large trace resolution may be slow and could make Figma less responsive.</p>
+          </div>
+          <p class="subtle">Complex results are capped to keep Figma responsive.</p>
+        </section>
+      </aside>
+      <section class="workspace">
+        <div class="notice"><strong>Preview updates as you adjust settings</strong><small>Scroll over preview to zoom</small></div>
+        <div class="canvas-wrap"><canvas id="preview" width="380" height="430" aria-label="Trace preview. Scroll to zoom and double-click to reset zoom." title="Scroll to zoom · Double-click to reset"></canvas></div>
+        <div class="footer"><div id="status">Select one layer with an image fill.</div><button id="trace" type="button">Place traced vector</button></div>
+      </section>
+    </div>
+    <script>
+      const PALETTE_SAMPLE_SIDE = 300, PERFORMANCE_WARNING_SIDE = 2048, MAX_PATHS = 120, MAX_SEGMENTS = 1800, MIN_PREVIEW_ZOOM = .25, MAX_PREVIEW_ZOOM = 8;
+      const $ = (id) => document.getElementById(id);
+      const controls = { previewMode: $("preview-mode"), showPath: $("show-path"), showPoints: $("show-points"), fadeImage: $("fade-image"), invert: $("invert"), blur: $("blur"), threshold: $("threshold"), stackColors: $("stack-colors"), colors: $("colors"), detail: $("detail"), bwIgnore: $("bw-ignore"), bwSmoothness: $("bw-smoothness"), bwCurve: $("bw-curve"), colorIgnore: $("color-ignore"), colorSmoothness: $("color-smoothness"), colorCurve: $("color-curve"), traceScalePercent: $("trace-scale-percent") };
+      const previewCanvas = $("preview"), previewContext = previewCanvas.getContext("2d"), traceButton = $("trace"), statusElement = $("status");
+      const detailPresets = { low: { ltres: 2.5, qtres: 2.5 }, balanced: { ltres: 1.5, qtres: 1.5 }, high: { ltres: .75, qtres: .75 } };
+      let mode = "bw", sourceImage = null, cachedTrace = null, traceTimer = null, palette = null, previewZoom = 1, previewPanX = 0, previewPanY = 0;
+
+      function activeTraceControls() { return mode === "color" ? { pathomit:+controls.colorIgnore.value, ltres:+controls.colorSmoothness.value / 10, qtres:+controls.colorCurve.value / 10 } : { pathomit:+controls.bwIgnore.value, ltres:+controls.bwSmoothness.value / 10, qtres:+controls.bwCurve.value / 10 }; }
+      function options() { const trace=activeTraceControls(); return { mode, numberofcolors:mode==="color"&&palette?palette.length:+controls.colors.value, palette:mode==="color"&&palette?palette.map(color=>({...color})):undefined, pathomit:trace.pathomit, ltres:trace.ltres, qtres:trace.qtres, traceScalePercent:+controls.traceScalePercent.value, invert:controls.invert.checked, blur:+controls.blur.value, threshold:+controls.threshold.value, stackColors:controls.stackColors.checked }; }
+      function setStatus(message, isError) { statusElement.textContent=message; statusElement.classList.toggle("error",!!isError); }
+      function traceDimensions(image=sourceImage, percent=+controls.traceScalePercent.value) { return image ? { width:Math.max(1,Math.round(image.naturalWidth*percent/100)), height:Math.max(1,Math.round(image.naturalHeight*percent/100)) } : null; }
+      function updateResolutionLabel() { const percent=+controls.traceScalePercent.value, dimensions=traceDimensions(), output=$("trace-resolution-value"), warning=$("performance-warning"); output.textContent=dimensions?`${percent}% — ${dimensions.width} × ${dimensions.height} px`:`${percent}%`; warning.hidden=!dimensions||Math.max(dimensions.width,dimensions.height)<=PERFORMANCE_WARNING_SIDE; }
+      function labels() { $("blur-value").textContent=controls.blur.value; $("threshold-value").textContent=controls.threshold.value; $("colors-value").textContent=controls.colors.value; $("palette-count").textContent=`${palette?palette.length:+controls.colors.value} colours`; $("bw-ignore-value").textContent=controls.bwIgnore.value; $("bw-smoothness-value").textContent=(+controls.bwSmoothness.value/10).toFixed(1); $("bw-curve-value").textContent=(+controls.bwCurve.value/10).toFixed(1); $("color-ignore-value").textContent=controls.colorIgnore.value; $("color-smoothness-value").textContent=(+controls.colorSmoothness.value/10).toFixed(1); $("color-curve-value").textContent=(+controls.colorCurve.value/10).toFixed(1); updateResolutionLabel(); }
+      function rgbHex(color) { return `#${[color.r,color.g,color.b].map(value=>value.toString(16).padStart(2,"0")).join("")}`; }
+      function hexRgb(hex) { return { r:parseInt(hex.slice(1,3),16), g:parseInt(hex.slice(3,5),16), b:parseInt(hex.slice(5,7),16) }; }
+      function renderPalette() { const holder=$("palette"); holder.textContent=""; if(!palette){labels();return;} palette.forEach((color,index)=>{ const swatch=document.createElement("div"), input=document.createElement("input"), remove=document.createElement("button"); swatch.className="swatch";swatch.style.backgroundColor=`rgba(${color.r},${color.g},${color.b},${color.a/255})`; input.type="color";input.value=rgbHex(color);input.title=`Edit colour ${index+1}`;input.setAttribute("aria-label",`Edit colour ${index+1}`);input.addEventListener("input",()=>{const rgb=hexRgb(input.value);palette[index]={...color,...rgb};renderPalette();schedulePreview();}); remove.className="swatch-remove";remove.type="button";remove.textContent="×";remove.title="Remove colour";remove.setAttribute("aria-label",`Remove colour ${index+1}`);remove.disabled=palette.length<=2;remove.addEventListener("click",()=>{if(palette.length<=2)return;palette.splice(index,1);renderPalette();schedulePreview();});swatch.append(input,remove);holder.append(swatch); }); labels(); }
+      function extractPalette() { if(!sourceImage)return; const scale=Math.min(1,PALETTE_SAMPLE_SIDE/Math.max(sourceImage.naturalWidth,sourceImage.naturalHeight)), prepared=prepareImage(sourceImage,{mode:"color",blur:0},Math.max(1,Math.round(sourceImage.naturalWidth*scale)),Math.max(1,Math.round(sourceImage.naturalHeight*scale))); const quantified=ImageTracer.colorquantization(prepared.data,{numberofcolors:+controls.colors.value,colorsampling:2,colorquantcycles:3,mincolorratio:0,blurradius:0}); palette=quantified.palette.map(color=>({r:color.r,g:color.g,b:color.b,a:color.a}));renderPalette(); }
+      function setMode(next) { mode=next; document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("active",t.dataset.mode===mode)); $("bw-panel").hidden=mode!=="bw"; $("color-panel").hidden=mode!=="color"; $("bw-tracing-panel").hidden=mode!=="bw"; $("color-tracing-panel").hidden=mode!=="color"; if(mode==="color"&&!palette)extractPalette(); schedulePreview(); }
+      function reset() { mode="bw"; controls.previewMode.value="original"; controls.showPath.checked=true; controls.showPoints.checked=true; controls.fadeImage.checked=false; controls.invert.checked=false; controls.blur.value=0; controls.threshold.value=128; controls.stackColors.checked=true; controls.colors.value=8; controls.detail.value="balanced"; controls.bwIgnore.value=12; controls.bwSmoothness.value=15; controls.bwCurve.value=15; controls.colorIgnore.value=12; controls.colorSmoothness.value=15; controls.colorCurve.value=15; controls.traceScalePercent.value=50; previewZoom=1;previewPanX=0;previewPanY=0; palette=null; if(sourceImage)extractPalette(); renderPalette(); labels(); setMode("bw"); }
+      function loadImage(bytes) { return new Promise((resolve,reject)=>{ const url=URL.createObjectURL(new Blob([bytes],{type:"application/octet-stream"})), image=new Image(); image.onload=()=>{URL.revokeObjectURL(url);resolve(image)}; image.onerror=()=>{URL.revokeObjectURL(url);reject(new Error("Unable to load preview image."))}; image.src=url; }); }
+      function prepareImage(image, settings, width, height) { const canvas=document.createElement("canvas"), context=canvas.getContext("2d",{willReadFrequently:true}); canvas.width=width;canvas.height=height;context.filter=settings.blur?`blur(${settings.blur}px)`:"none";context.drawImage(image,0,0,width,height);context.filter="none"; const data=context.getImageData(0,0,width,height); if(settings.mode==="bw"){for(let i=0;i<data.data.length;i+=4){const l=.2126*data.data[i]+.7152*data.data[i+1]+.0722*data.data[i+2], v=(l>=settings.threshold)!==settings.invert?255:0;data.data[i]=data.data[i+1]=data.data[i+2]=v;}} return {canvas,data,width,height}; }
+      function preprocess(image, settings, traceScalePercent) { const dimensions=traceDimensions(image,traceScalePercent); return prepareImage(image,settings,dimensions.width,dimensions.height); }
+      function tracePrepared(prepared, settings) { return ImageTracer.imagedataToTracedata(prepared.data,{numberofcolors:settings.mode==="bw"?2:settings.numberofcolors,pal:settings.mode==="color"&&settings.palette?settings.palette.map(color=>({...color})):undefined,colorquantcycles:settings.mode==="color"&&settings.palette?1:3,pathomit:settings.pathomit,ltres:settings.ltres,qtres:settings.qtres,layering:settings.stackColors?0:1,blurradius:0,strokewidth:0,linefilter:true,roundcoords:1}); }
+      function drawBackground() { previewContext.clearRect(0,0,previewCanvas.width,previewCanvas.height); previewContext.fillStyle="#222";previewContext.fillRect(0,0,previewCanvas.width,previewCanvas.height); }
+      function fitting(width,height) { const baseScale=Math.min((previewCanvas.width-24)/width,(previewCanvas.height-24)/height), s=baseScale*previewZoom, w=width*s,h=height*s;return {s,x:(previewCanvas.width-w)/2+previewPanX,y:(previewCanvas.height-h)/2+previewPanY,w,h};}
+      function resetPreviewZoom() { previewZoom=1;previewPanX=0;previewPanY=0;renderPreview(); }
+      function zoomPreview(event) { if(!sourceImage)return;event.preventDefault(); const rect=previewCanvas.getBoundingClientRect(), x=(event.clientX-rect.left)*previewCanvas.width/rect.width, y=(event.clientY-rect.top)*previewCanvas.height/rect.height, settings=options(), dimensions=traceDimensions(sourceImage,settings.traceScalePercent), oldFit=fitting(dimensions.width,dimensions.height), delta=event.deltaY*(event.deltaMode===1?16:event.deltaMode===2?previewCanvas.height:1), nextZoom=Math.min(MAX_PREVIEW_ZOOM,Math.max(MIN_PREVIEW_ZOOM,previewZoom*Math.exp(-delta*.0015))); if(nextZoom===previewZoom)return; const imageX=(x-oldFit.x)/oldFit.s,imageY=(y-oldFit.y)/oldFit.s,baseScale=Math.min((previewCanvas.width-24)/dimensions.width,(previewCanvas.height-24)/dimensions.height),nextScale=baseScale*nextZoom,nextWidth=dimensions.width*nextScale,nextHeight=dimensions.height*nextScale; previewZoom=nextZoom;previewPanX=x-imageX*nextScale-(previewCanvas.width-nextWidth)/2;previewPanY=y-imageY*nextScale-(previewCanvas.height-nextHeight)/2;renderPreview(); }
+      function drawImagePreview(prepared, fit) { const temp=document.createElement("canvas"),ctx=temp.getContext("2d");temp.width=prepared.width;temp.height=prepared.height;ctx.putImageData(prepared.data,0,0);previewContext.drawImage(temp,fit.x,fit.y,fit.w,fit.h); }
+      function appendCanvasPath(path, fit) { const segs=path.segments;if(!segs.length)return;previewContext.moveTo(fit.x+segs[0].x1*fit.s,fit.y+segs[0].y1*fit.s);segs.forEach(seg=>{if(seg.type==="Q")previewContext.quadraticCurveTo(fit.x+seg.x2*fit.s,fit.y+seg.y2*fit.s,fit.x+seg.x3*fit.s,fit.y+seg.y3*fit.s);else previewContext.lineTo(fit.x+seg.x2*fit.s,fit.y+seg.y2*fit.s);});previewContext.closePath();}
+      function drawTrace(tracedata, prepared, fit, fillPaths) { tracedata.layers.forEach((paths,layerIndex)=>{const color=tracedata.palette[layerIndex], fill=`rgba(${color.r},${color.g},${color.b},${color.a/255})`;paths.forEach(path=>{if(path.isholepath)return;previewContext.beginPath();appendCanvasPath(path,fit);(path.holechildren||[]).forEach(index=>appendCanvasPath(paths[index],fit));if(fillPaths){previewContext.fillStyle=fill;previewContext.fill("evenodd");}if(controls.showPath.checked){previewContext.strokeStyle="#ff3b30";previewContext.lineWidth=1;previewContext.stroke();}if(controls.showPoints.checked){previewContext.fillStyle="#4cbeff";path.segments.forEach(seg=>{previewContext.beginPath();previewContext.arc(fit.x+seg.x1*fit.s,fit.y+seg.y1*fit.s,2,0,Math.PI*2);previewContext.fill();});}});});}
+      function renderPreview() { drawBackground(); if(!sourceImage)return; try { const settings=options(), prepared=preprocess(sourceImage,settings,settings.traceScalePercent), fit=fitting(prepared.width,prepared.height), original=controls.previewMode.value==="original"; if(original){ previewContext.globalAlpha=controls.fadeImage.checked?.35:1;previewContext.drawImage(sourceImage,fit.x,fit.y,fit.w,fit.h);previewContext.globalAlpha=1; }else if(controls.fadeImage.checked){previewContext.globalAlpha=.3;drawImagePreview(prepared,fit);previewContext.globalAlpha=1;} if(!cachedTrace)cachedTrace=tracePrepared(prepared,settings); drawTrace(cachedTrace,prepared,fit,!original); } catch(error) { setStatus(error.message||"Unable to render preview.",true); } }
+      function schedulePreview() { cachedTrace=null;clearTimeout(traceTimer);traceTimer=setTimeout(renderPreview,150); }
+      function serializeTrace(tracedata, prepared) { let paths=0,segs=0;const layers=tracedata.layers.map((layer,index)=>({color:tracedata.palette[index],paths:layer.map(path=>{paths++;segs+=path.segments.length;return{segments:path.segments.map(s=>({type:s.type,x1:s.x1,y1:s.y1,x2:s.x2,y2:s.y2,x3:s.x3,y3:s.y3})),holechildren:path.holechildren||[],isholepath:!!path.isholepath}})}));if(paths>MAX_PATHS||segs>MAX_SEGMENTS)throw new Error("This image is too detailed to trace safely. Increase Ignore less than or lower the resolution percentage.");return{width:prepared.width,height:prepared.height,layers};}
+      async function traceImage(message) { try { const image=await loadImage(message.bytes instanceof Uint8Array?message.bytes:new Uint8Array(message.bytes)), prepared=preprocess(image,message.options,message.options.traceScalePercent), tracedata=tracePrepared(prepared,message.options); parent.postMessage({pluginMessage:{type:"TRACE_RESULT",trace:serializeTrace(tracedata,prepared)}},"*"); } catch(error) { parent.postMessage({pluginMessage:{type:"TRACE_ERROR",message:error.message||"Image tracing failed."}},"*"); } }
+      function applyDetailPreset() { const preset=detailPresets[controls.detail.value];if(!preset)return;controls.colorSmoothness.value=Math.round(preset.ltres*10);controls.colorCurve.value=Math.round(preset.qtres*10);labels();schedulePreview(); }
+      document.querySelectorAll(".tab").forEach(tab=>tab.addEventListener("click",()=>setMode(tab.dataset.mode)));
+      $("reset").addEventListener("click",reset);
+      controls.colors.addEventListener("input",()=>{extractPalette();labels();schedulePreview();});
+      controls.detail.addEventListener("input",applyDetailPreset);
+      [controls.colorSmoothness,controls.colorCurve].forEach(control=>control.addEventListener("input",()=>{controls.detail.value="custom";labels();schedulePreview();}));
+      Object.values(controls).filter(control=>![controls.colors,controls.detail,controls.colorSmoothness,controls.colorCurve,controls.traceScalePercent].includes(control)).forEach(control=>control.addEventListener("input",()=>{labels();schedulePreview();}));
+      controls.traceScalePercent.addEventListener("input",updateResolutionLabel);
+      controls.traceScalePercent.addEventListener("change",schedulePreview);
+      previewCanvas.addEventListener("wheel",zoomPreview,{passive:false});
+      previewCanvas.addEventListener("dblclick",resetPreviewZoom);
+      traceButton.addEventListener("click",()=>{const dimensions=traceDimensions();if(dimensions&&Math.max(dimensions.width,dimensions.height)>PERFORMANCE_WARNING_SIDE&&!window.confirm(`This trace will use ${dimensions.width} × ${dimensions.height} px and may be slow or make Figma less responsive. Continue?`))return;traceButton.disabled=true;setStatus("Tracing image…");parent.postMessage({pluginMessage:{type:"TRACE_REQUEST",options:options()}},"*");});
+      window.onmessage=async event=>{const message=event.data&&event.data.pluginMessage;if(!message)return;if(message.type==="PREVIEW_IMAGE"){try{sourceImage=await loadImage(message.bytes instanceof Uint8Array?message.bytes:new Uint8Array(message.bytes));previewZoom=1;previewPanX=0;previewPanY=0;palette=null;extractPalette();labels();schedulePreview();}catch(error){setStatus(error.message,true)}}else if(message.type==="TRACE_IMAGE")traceImage(message);else if(message.type==="STATUS"){setStatus(message.message,message.isError);traceButton.disabled=!!message.busy;}};
+      reset(); parent.postMessage({pluginMessage:{type:"UI_READY"}},"*");
+    </script>
+  </body>
+</html>

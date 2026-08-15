@@ -1,0 +1,13 @@
+{
+  "name": "figma-image-tracer",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "node build-ui.cjs && tsc -p tsconfig.json",
+    "watch": "npm run build && tsc -p tsconfig.json --watch"
+  },
+  "devDependencies": {
+    "@figma/plugin-typings": "^1.117.0",
+    "typescript": "^5.8.3"
+  }
+}
