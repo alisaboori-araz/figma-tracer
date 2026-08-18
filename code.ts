@@ -157,7 +157,7 @@ function normalizeOptions(options: TraceOptions): TraceOptions {
       ? palette.length
       : Math.round(clamp(options.numberofcolors, 2, 16)),
     ...(palette ? { palette } : {}),
-    pathomit: Math.round(clamp(options.pathomit, 2, 30)),
+    pathomit: Math.round(clamp(options.pathomit, 2, 250)),
     ltres: clamp(options.ltres, 0.1, 4),
     qtres: clamp(options.qtres, 0.1, 4),
     traceScalePercent: Number.isFinite(requestedTraceScalePercent)

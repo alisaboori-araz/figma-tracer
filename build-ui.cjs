@@ -20,7 +20,8 @@ if (!template.includes(placeholder)) {
   throw new Error("ui.template.html is missing the ImageTracer placeholder.");
 }
 
-const embeddedLibrary = `<script>\n${imageTracerSource}\n</script>`;
+const safeWorkerSource = JSON.stringify(imageTracerSource).replace(/</g, "\\u003c");
+const embeddedLibrary = `<script>\n${imageTracerSource}\n</script>\n<script>const IMAGE_TRACER_SOURCE = ${safeWorkerSource};</script>`;
 const output = template.replace(placeholder, embeddedLibrary);
 
 fs.writeFileSync(outputPath, output, "utf8");
