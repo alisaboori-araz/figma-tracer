@@ -1,6 +1,10 @@
 interface TraceOptions {
   mode: "bw" | "color";
   sourceMode?: "rendered" | "original";
+  layeringMode?: "hierarchical" | "sequential" | "cutout";
+  edgeStyle?: "organic" | "geometric";
+  useEdges?: boolean;
+  edgeSensitivity?: number;
   curveAlgorithm?: "potrace" | "standard";
   smoothSteps?: number;
   alphaMax?: number;
@@ -188,6 +192,17 @@ function normalizeOptions(options: TraceOptions): TraceOptions {
   return {
     mode,
     sourceMode: options.sourceMode === "original" ? "original" : "rendered",
+    layeringMode:
+      options.layeringMode === "cutout"
+        ? "cutout"
+        : options.layeringMode === "sequential"
+        ? "sequential"
+        : "hierarchical",
+    edgeStyle: options.edgeStyle === "geometric" ? "geometric" : "organic",
+    useEdges: Boolean(options.useEdges),
+    edgeSensitivity: Number.isFinite(Number(options.edgeSensitivity))
+      ? Math.max(1, Number(options.edgeSensitivity))
+      : 35,
     curveAlgorithm: options.curveAlgorithm === "standard" ? "standard" : "potrace",
     smoothSteps: Number.isFinite(Number(options.smoothSteps))
       ? Math.max(0, Math.round(Number(options.smoothSteps)))
@@ -416,7 +431,7 @@ async function createNativeTrace(
         }
 
         const vector = figma.createVector();
-        vector.name = "Traced path";
+        vector.name = `Shape ${processedPaths + 1} (rgb ${layer.color.r},${layer.color.g},${layer.color.b})`;
         await vector.setVectorNetworkAsync({
           vertices: network.vertices,
           segments: network.segments,

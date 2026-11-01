@@ -96,7 +96,9 @@ function ImageTracer(){
 		// 1. Color quantization
 		var ii = _this.colorquantization( imgd, options );
 		
-		if(options.layering === 0){// Sequential layering
+		if(options.layering === 2 || options.hierarchical || options.layering === 'hierarchical'){
+			return _this.hierarchicalTracedata( imgd, ii, options );
+		}else if(options.layering === 0){// Sequential layering
 			
 			// create tracedata object
 			var tracedata = {
@@ -174,6 +176,10 @@ function ImageTracer(){
 			speckleradius : 1.5,
 			rightangleenhance : true,
 			curvealgorithm : 'potrace',
+			edgestyle : 'organic',
+			hierarchical : false,
+			edgesensitivity : 35,
+			minregionarea : 4,
 			smoothsteps : 2,
 			alphamax : 1.0,
 			opttolerance : 0.8,
@@ -1422,7 +1428,12 @@ function ImageTracer(){
 
 	this.tracepath = function( path, ltres, qtres, options ){
 		options = options || {};
-		if(options.curveAlgorithm === 'standard' || options.curvealgorithm === 'standard'){
+		var curveAlg = (options.curveAlgorithm || options.curvealgorithm || '').toLowerCase();
+		var edgeStyle = (options.edgeStyle || options.edgestyle || '').toLowerCase();
+		if(edgeStyle === 'geometric' || curveAlg === 'geometric'){
+			return _this.geometricTracePath( path, ltres, options );
+		}
+		if(curveAlg === 'standard'){
 			return _this.standardTracePath( path, ltres, qtres );
 		}
 		return _this.potraceTracePath( path, ltres, qtres, options );
@@ -1505,6 +1516,433 @@ function ImageTracer(){
 		}
 		return btbis;
 	},
+
+	////////////////////////////////////////////////////////////
+	//
+	//  Hierarchical Region Decomposition & Area Stacking
+	//
+	////////////////////////////////////////////////////////////
+
+	// Exact polygon area calculation using the Shoelace formula
+	this.polygonArea = function(points){
+		if(!points || points.length < 3) return 0;
+		var area = 0;
+		var n = points.length;
+		for(var i=0; i<n; i++){
+			var j = (i + 1) % n;
+			area += points[i].x * points[j].y;
+			area -= points[j].x * points[i].y;
+		}
+		return Math.abs(area) * 0.5;
+	};
+
+	// Scanline sampling inside polygon to identify dominant (mode) palette color
+	this.getDominantPaletteColor = function(points, bbox, ii, palette){
+		if(!palette || palette.length === 0){
+			return { index: 0, color: { r:0, g:0, b:0, a:255 }, ratio: 1.0 };
+		}
+		var aw = ii.array[0].length - 2;
+		var ah = ii.array.length - 2;
+		var minX = Math.max(0, Math.floor(bbox[0]));
+		var minY = Math.max(0, Math.floor(bbox[1]));
+		var maxX = Math.min(aw - 1, Math.ceil(bbox[2]));
+		var maxY = Math.min(ah - 1, Math.ceil(bbox[3]));
+
+		var n = points.length;
+		if(n < 3 || maxX < minX || maxY < minY){
+			var cy = Math.max(0, Math.min(ah - 1, Math.round((minY + maxY) / 2)));
+			var cx = Math.max(0, Math.min(aw - 1, Math.round((minX + maxX) / 2)));
+			var defaultIdx = ii.array[cy + 1][cx + 1] % palette.length;
+			return { index: defaultIdx, color: palette[defaultIdx], ratio: 1.0 };
+		}
+
+		var counts = new Int32Array(palette.length);
+		var totalSampled = 0;
+
+		var spanY = maxY - minY + 1;
+		var spanX = maxX - minX + 1;
+		var yStride = Math.max(1, Math.floor(spanY / 64));
+		var xStride = Math.max(1, Math.floor(spanX / 64));
+
+		for(var y = minY; y <= maxY; y += yStride){
+			var py = y + 0.5;
+			var nodeX = [];
+			for(var i = 0; i < n; i++){
+				var j = (i + 1) % n;
+				var p1 = points[i];
+				var p2 = points[j];
+				if((p1.y < py && p2.y >= py) || (p2.y < py && p1.y >= py)){
+					var x = p1.x + (py - p1.y) / (p2.y - p1.y) * (p2.x - p1.x);
+					nodeX.push(x);
+				}
+			}
+			if(nodeX.length < 2) continue;
+			nodeX.sort(function(a, b){ return a - b; });
+
+			for(var k = 0; k < nodeX.length; k += 2){
+				if(k + 1 >= nodeX.length) break;
+				var segStartX = Math.max(minX, Math.ceil(nodeX[k]));
+				var segEndX = Math.min(maxX, Math.floor(nodeX[k + 1]));
+				for(var x = segStartX; x <= segEndX; x += xStride){
+					var c = ii.array[y + 1][x + 1];
+					if(c >= 0 && c < palette.length){
+						counts[c]++;
+						totalSampled++;
+					}
+				}
+			}
+		}
+
+		if(totalSampled === 0){
+			var cy = Math.max(0, Math.min(ah - 1, Math.round((minY + maxY) / 2)));
+			var cx = Math.max(0, Math.min(aw - 1, Math.round((minX + maxX) / 2)));
+			var defaultIdx = ii.array[cy + 1][cx + 1] % palette.length;
+			return { index: defaultIdx, color: palette[defaultIdx], ratio: 1.0 };
+		}
+
+		var bestCount = -1;
+		var bestIdx = 0;
+		for(var c = 0; c < palette.length; c++){
+			if(counts[c] > bestCount){
+				bestCount = counts[c];
+				bestIdx = c;
+			}
+		}
+
+		return {
+			index: bestIdx,
+			color: palette[bestIdx],
+			ratio: bestCount / totalSampled
+		};
+	};
+
+	// Geometric edge tracing: simplifies closed polygon with corner preservation, outputting crisp straight segments
+	this.geometricTracePath = function(path, ltres, options){
+		var smp = {};
+		smp.segments = [];
+		smp.boundingbox = path.boundingbox;
+		smp.holechildren = [];
+		smp.isholepath = false;
+
+		var pts = path.points;
+		if(!pts || pts.length < 3){
+			return smp;
+		}
+
+		var tol = Number(ltres);
+		if(!Number.isFinite(tol) || tol <= 0) tol = 1.0;
+		var simplified = _this.potraceSimplifyClosed(pts, tol * 1.2);
+		if(simplified.length < 3){
+			simplified = pts;
+		}
+
+		var n = simplified.length;
+		for(var i = 0; i < n; i++){
+			var p1 = simplified[i];
+			var p2 = simplified[(i + 1) % n];
+			smp.segments.push({
+				type: "L",
+				x1: Math.round(p1.x * 100) / 100,
+				y1: Math.round(p1.y * 100) / 100,
+				x2: Math.round(p2.x * 100) / 100,
+				y2: Math.round(p2.y * 100) / 100
+			});
+		}
+
+		return smp;
+	};
+
+	// Detects enclosed regions formed by gradient/contrast edges
+	this.detectEdgeBoundaries = function(imgd, ii, options){
+		var w = imgd.width, h = imgd.height, d = imgd.data;
+		var sensitivity = options.edgesensitivity !== undefined ? Number(options.edgesensitivity) : 35;
+		if(sensitivity <= 0) return [];
+
+		var speckleRadius = options.speckleRadius !== undefined ? Number(options.speckleRadius) : Number(options.speckleradius || 1.5);
+		var minRegionArea = options.minregionarea !== undefined ? Number(options.minregionarea) : Math.max(4, Math.PI * speckleRadius * speckleRadius * 0.5);
+
+		// Compute Sobel gradient magnitude on RGB
+		var edges = new Uint8Array(w * h);
+		for(var y = 1; y < h - 1; y++){
+			var rPrev = (y - 1) * w;
+			var rCurr = y * w;
+			var rNext = (y + 1) * w;
+			for(var x = 1; x < w - 1; x++){
+				var idx00 = (rPrev + x - 1) * 4;
+				var idx02 = (rPrev + x + 1) * 4;
+				var idx10 = (rCurr + x - 1) * 4;
+				var idx12 = (rCurr + x + 1) * 4;
+				var idx20 = (rNext + x - 1) * 4;
+				var idx22 = (rNext + x + 1) * 4;
+
+				var gx = (d[idx02] + 2*d[idx12] + d[idx22]) - (d[idx00] + 2*d[idx10] + d[idx20]);
+				var gy = (d[idx20] + 2*d[(rNext + x)*4] + d[idx22]) - (d[idx00] + 2*d[(rPrev + x)*4] + d[idx02]);
+
+				var mag = (Math.abs(gx) + Math.abs(gy)) * 0.25;
+				if(mag > sensitivity){
+					edges[rCurr + x] = 1;
+				}
+			}
+		}
+
+		// Connected component labeling on non-edge pixels
+		var labels = new Int32Array(w * h);
+		var currentLabel = 0;
+		var queue = new Int32Array(w * h);
+		var regions = [];
+
+		for(var y = 0; y < h; y++){
+			for(var x = 0; x < w; x++){
+				var pIdx = y * w + x;
+				if(edges[pIdx] === 0 && labels[pIdx] === 0){
+					currentLabel++;
+					var head = 0, tail = 0;
+					queue[tail++] = pIdx;
+					labels[pIdx] = currentLabel;
+
+					var minPx = x, maxPx = x, minPy = y, maxPy = y;
+					var pixelCount = 0;
+
+					while(head < tail){
+						var curr = queue[head++];
+						pixelCount++;
+						var cx = curr % w;
+						var cy = Math.floor(curr / w);
+
+						if(cx < minPx) minPx = cx;
+						if(cx > maxPx) maxPx = cx;
+						if(cy < minPy) minPy = cy;
+						if(cy > maxPy) maxPy = cy;
+
+						if(cx > 0 && edges[curr - 1] === 0 && labels[curr - 1] === 0){
+							labels[curr - 1] = currentLabel;
+							queue[tail++] = curr - 1;
+						}
+						if(cx < w - 1 && edges[curr + 1] === 0 && labels[curr + 1] === 0){
+							labels[curr + 1] = currentLabel;
+							queue[tail++] = curr + 1;
+						}
+						if(cy > 0 && edges[curr - w] === 0 && labels[curr - w] === 0){
+							labels[curr - w] = currentLabel;
+							queue[tail++] = curr - w;
+						}
+						if(cy < h - 1 && edges[curr + w] === 0 && labels[curr + w] === 0){
+							labels[curr + w] = currentLabel;
+							queue[tail++] = curr + w;
+						}
+					}
+
+					if(pixelCount >= minRegionArea){
+						regions.push({
+							label: currentLabel,
+							pixelCount: pixelCount,
+							bbox: [minPx, minPy, maxPx, maxPy]
+						});
+					}
+				}
+			}
+		}
+
+		var edgeCandidates = [];
+		for(var r = 0; r < regions.length; r++){
+			var reg = regions[r];
+			var rw = reg.bbox[2] - reg.bbox[0] + 1;
+			var rh = reg.bbox[3] - reg.bbox[1] + 1;
+			if(rw < 2 || rh < 2) continue;
+
+			var subGrid = [];
+			for(var sj = 0; sj < rh + 2; sj++){
+				subGrid[sj] = new Uint8Array(rw + 2);
+			}
+			for(var y = reg.bbox[1]; y <= reg.bbox[3]; y++){
+				var rOff = y * w;
+				var sj = y - reg.bbox[1] + 1;
+				for(var x = reg.bbox[0]; x <= reg.bbox[2]; x++){
+					if(labels[rOff + x] === reg.label){
+						subGrid[sj][x - reg.bbox[0] + 1] = 1;
+					}
+				}
+			}
+
+			var nodeGrid = [];
+			for(var sj = 0; sj < rh + 2; sj++){
+				nodeGrid[sj] = new Uint8Array(rw + 2);
+			}
+			for(var sj = 1; sj < rh + 2; sj++){
+				for(var si = 1; si < rw + 2; si++){
+					nodeGrid[sj][si] =
+						(subGrid[sj-1][si-1] ? 1 : 0) +
+						(subGrid[sj-1][si] ? 2 : 0) +
+						(subGrid[sj][si-1] ? 8 : 0) +
+						(subGrid[sj][si] ? 4 : 0);
+				}
+			}
+
+			var subPaths = _this.pathscan(nodeGrid, options.pathomit || 8, options);
+			for(var sp = 0; sp < subPaths.length; sp++){
+				var pth = subPaths[sp];
+				if(pth.isholepath || !pth.points || pth.points.length < 3) continue;
+
+				var shiftedPoints = [];
+				for(var pt = 0; pt < pth.points.length; pt++){
+					shiftedPoints.push({
+						x: pth.points[pt].x + reg.bbox[0],
+						y: pth.points[pt].y + reg.bbox[1]
+					});
+				}
+				var shiftedBbox = [
+					pth.boundingbox[0] + reg.bbox[0],
+					pth.boundingbox[1] + reg.bbox[1],
+					pth.boundingbox[2] + reg.bbox[0],
+					pth.boundingbox[3] + reg.bbox[1]
+				];
+				var pArea = _this.polygonArea(shiftedPoints);
+				if(pArea < minRegionArea) continue;
+
+				if(speckleRadius > 0 && !_this.canContainCircle(shiftedPoints, shiftedBbox, speckleRadius)){
+					continue;
+				}
+
+				var dom = _this.getDominantPaletteColor(shiftedPoints, shiftedBbox, ii, ii.palette);
+				edgeCandidates.push({
+					points: shiftedPoints,
+					boundingbox: shiftedBbox,
+					area: pArea,
+					color: dom.color,
+					colorIndex: dom.index,
+					ishole: false
+				});
+			}
+		}
+
+		return edgeCandidates;
+	};
+
+	// Hierarchical region decomposition: extracts solid area boundaries and sorts descending (Largest -> Smallest)
+	this.hierarchicalTracedata = function( imgd, ii, options ){
+		options = _this.checkoptions(options);
+		var palette = ii.palette;
+		var width = imgd.width;
+		var height = imgd.height;
+		var edgeStyle = (options.edgestyle || options.edgeStyle || 'organic').toLowerCase();
+		var speckleRadius = options.speckleRadius !== undefined ? Number(options.speckleRadius) : Number(options.speckleradius || 1.5);
+		var minRegionArea = options.minregionarea !== undefined ? Number(options.minregionarea) : Math.max(4, Math.PI * speckleRadius * speckleRadius * 0.5);
+		var pathomit = options.pathomit !== undefined ? Number(options.pathomit) : 8;
+
+		var candidates = [];
+
+		// 1. Extract closed boundary loops from color layers
+		for(var cnum = 0; cnum < palette.length; cnum++){
+			var layer = _this.layeringstep(ii, cnum);
+			var paths = _this.pathscan(layer, pathomit, options);
+
+			for(var p = 0; p < paths.length; p++){
+				var path = paths[p];
+				// Underlying layers are solid shapes: outer boundaries define solid regions;
+				// holes are naturally traced as outer boundaries of their respective nested color regions.
+				if(!path.points || path.points.length < 3 || path.isholepath) continue;
+
+				var area = _this.polygonArea(path.points);
+				if(area < minRegionArea) continue;
+
+				// Circular Polylabel filter check
+				if(speckleRadius > 0 && !_this.canContainCircle(path.points, path.boundingbox, speckleRadius)){
+					continue;
+				}
+
+				// Dominant color sampling inside enclosed region
+				var dom = _this.getDominantPaletteColor(path.points, path.boundingbox, ii, palette);
+
+				candidates.push({
+					points: path.points,
+					boundingbox: path.boundingbox,
+					area: area,
+					color: dom.color,
+					colorIndex: dom.index,
+					ishole: false
+				});
+			}
+		}
+
+		// 2. Optional: Detect gradient edge-enclosed regions if edge mode is enabled
+		var useEdges = (options.useedges || options.hierarchicalmode === 'edge' || options.hierarchicalmode === 'hybrid');
+		if(useEdges && options.edgesensitivity !== undefined && Number(options.edgesensitivity) > 0){
+			var edgeRegions = _this.detectEdgeBoundaries(imgd, ii, options);
+			for(var e = 0; e < edgeRegions.length; e++){
+				candidates.push(edgeRegions[e]);
+			}
+		}
+
+		// 3. Deduplication of nearly identical regions
+		candidates.sort(function(a, b){ return b.area - a.area; });
+
+		var uniqueCandidates = [];
+		for(var i = 0; i < candidates.length; i++){
+			var cA = candidates[i];
+			var isDup = false;
+			for(var j = 0; j < uniqueCandidates.length; j++){
+				var cB = uniqueCandidates[j];
+				if(Math.abs(cA.area - cB.area) / Math.max(cA.area, cB.area) < 0.04){
+					var bA = cA.boundingbox, bB = cB.boundingbox;
+					if(Math.abs(bA[0] - bB[0]) <= 2 && Math.abs(bA[1] - bB[1]) <= 2 &&
+					   Math.abs(bA[2] - bB[2]) <= 2 && Math.abs(bA[3] - bB[3]) <= 2){
+						isDup = true;
+						break;
+					}
+				}
+			}
+			if(!isDup){
+				uniqueCandidates.push(cA);
+			}
+		}
+
+		// 4. Ensure Area-Descending sort order (Largest area = Index 0 = Bottom layer)
+		uniqueCandidates.sort(function(a, b){ return b.area - a.area; });
+
+		// Optional max layers limit
+		if(options.maxlayers && options.maxlayers > 0 && uniqueCandidates.length > options.maxlayers){
+			uniqueCandidates = uniqueCandidates.slice(0, options.maxlayers);
+		}
+
+		// 5. Fit curves to each solid region according to edgeStyle (Organic Bézier vs Geometric Polygonal)
+		var finalLayers = [];
+		var finalPalette = [];
+
+		for(var k = 0; k < uniqueCandidates.length; k++){
+			var cand = uniqueCandidates[k];
+			var rawPath = {
+				points: cand.points,
+				boundingbox: cand.boundingbox,
+				holechildren: [], // ALWAYS solid shape (no cutouts)
+				isholepath: false
+			};
+
+			var fittedPath;
+			if(edgeStyle === 'geometric' || options.curvealgorithm === 'geometric'){
+				fittedPath = _this.geometricTracePath(rawPath, options.ltres, options);
+			}else if(options.curvealgorithm === 'standard'){
+				fittedPath = _this.standardTracePath(rawPath, options.ltres, options.qtres);
+			}else{
+				fittedPath = _this.potraceTracePath(rawPath, options.ltres, options.qtres, options);
+			}
+
+			// Guarantee solid shape properties
+			fittedPath.holechildren = [];
+			fittedPath.isholepath = false;
+
+			if(fittedPath.segments && fittedPath.segments.length > 0){
+				finalPalette.push(cand.color);
+				finalLayers.push([fittedPath]);
+			}
+		}
+
+		return {
+			layers: finalLayers,
+			palette: finalPalette,
+			width: width,
+			height: height
+		};
+	};
 	
 	////////////////////////////////////////////////////////////
 	//
