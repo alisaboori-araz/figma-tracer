@@ -67,8 +67,8 @@ type PluginMessage =
   | { type: "TRACE_SEQUENCE_RESULT"; trace: TraceResult; stepCount?: number }
   | { type: "TRACE_ERROR"; message: string };
 
-const UI_WIDTH = 720;
-const UI_HEIGHT = 640;
+const UI_WIDTH = 780;
+const UI_HEIGHT = 680;
 const OUTPUT_GAP = 32;
 let sourceNode: SceneNode | null = null;
 let selectionVersion = 0;
