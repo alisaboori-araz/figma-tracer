@@ -1,7 +1,13 @@
 interface TraceOptions {
   mode: "bw" | "color";
+  sourceMode?: "rendered" | "original";
+  curveAlgorithm?: "potrace" | "standard";
+  smoothSteps?: number;
+  alphaMax?: number;
+  speckleRadius?: number;
   numberofcolors: number;
   palette?: TraceColor[];
+  kmeansDistance?: string;
   pathomit: number;
   ltres: number;
   qtres: number;
@@ -13,13 +19,15 @@ interface TraceOptions {
 }
 
 interface TraceSegment {
-  type: "L" | "Q";
+  type: "L" | "Q" | "C";
   x1: number;
   y1: number;
   x2: number;
   y2: number;
   x3?: number;
   y3?: number;
+  x4?: number;
+  y4?: number;
 }
 
 interface TracePath {
@@ -48,6 +56,7 @@ interface TraceResult {
 
 type PluginMessage =
   | { type: "UI_READY" }
+  | { type: "CHANGE_SOURCE_MODE"; sourceMode: "rendered" | "original" }
   | { type: "TRACE_REQUEST"; options: TraceOptions }
   | { type: "TRACE_RESULT"; trace: TraceResult }
   | { type: "TRACE_ERROR"; message: string };
@@ -58,6 +67,7 @@ const OUTPUT_GAP = 32;
 let sourceNode: SceneNode | null = null;
 let selectionVersion = 0;
 let uiReady = false;
+let currentSourceMode: "rendered" | "original" = "rendered";
 
 function postStatus(message: string, isError = false, busy = false): void {
   figma.ui.postMessage({ type: "STATUS", message, isError, busy });
@@ -82,44 +92,68 @@ function getSelectedImagePaint(node: SceneNode): ImagePaint | null {
   );
 }
 
-async function refreshSelectionPreview(): Promise<void> {
+function hasImagePaint(node: SceneNode): boolean {
+  return getSelectedImagePaint(node) !== null;
+}
+
+async function getNodeBytes(
+  node: SceneNode,
+  sourceMode: "rendered" | "original" = currentSourceMode
+): Promise<Uint8Array> {
+  if (sourceMode === "original") {
+    const paint = getSelectedImagePaint(node);
+    if (paint && paint.imageHash) {
+      const image = figma.getImageByHash(paint.imageHash);
+      if (image) {
+        return await image.getBytesAsync();
+      }
+    }
+  }
+
+  // Rendered layer mode: captures the layer appearance directly from canvas (crops, masks, frames, vectors, etc.)
+  return await node.exportAsync({
+    format: "PNG",
+    constraint: { type: "SCALE", value: 1 },
+  });
+}
+
+async function refreshSelectionPreview(
+  sourceMode: "rendered" | "original" = currentSourceMode
+): Promise<void> {
   const version = ++selectionVersion;
   const selection = figma.currentPage.selection;
 
   if (selection.length === 0) {
-    postStatus("Select one layer with an image fill.");
+    postStatus("Select any layer on canvas to trace.");
+    figma.ui.postMessage({ type: "NO_SELECTION" });
     return;
   }
   if (selection.length !== 1) {
-    postStatus("Select exactly one layer with an image fill.", true);
+    postStatus("Select exactly one layer to trace.", true);
     return;
   }
 
-  const paint = getSelectedImagePaint(selection[0]);
-  if (!paint || !paint.imageHash) {
-    postStatus("Selected layer has no visible image fill.", true);
-    return;
-  }
-
-  const image = figma.getImageByHash(paint.imageHash);
-  if (!image) {
-    postStatus("Figma could not load the selected image.", true);
-    return;
-  }
+  const node = selection[0];
+  const hasImage = hasImagePaint(node);
 
   try {
-    postStatus("Loading preview…", false, true);
-    const bytes = await image.getBytesAsync();
+    postStatus(`Loading preview: ${node.name}…`, false, true);
+    const bytes = await getNodeBytes(node, sourceMode);
     if (version !== selectionVersion) {
       return;
     }
 
-    figma.ui.postMessage({ type: "PREVIEW_IMAGE", bytes });
-    postStatus(`Ready to trace: ${selection[0].name}`);
+    figma.ui.postMessage({
+      type: "PREVIEW_IMAGE",
+      bytes,
+      layerName: node.name,
+      hasImagePaint: hasImage,
+    });
+    postStatus(`Ready to trace: ${node.name}`);
   } catch (error) {
-    console.error("Unable to load preview image:", error);
+    console.error("Unable to load preview for layer:", error);
     if (version === selectionVersion) {
-      postStatus("Unable to load a preview for this image.", true);
+      postStatus("Unable to capture the selected layer.", true);
     }
   }
 }
@@ -153,19 +187,46 @@ function normalizeOptions(options: TraceOptions): TraceOptions {
 
   return {
     mode,
+    sourceMode: options.sourceMode === "original" ? "original" : "rendered",
+    curveAlgorithm: options.curveAlgorithm === "standard" ? "standard" : "potrace",
+    smoothSteps: Number.isFinite(Number(options.smoothSteps))
+      ? Math.max(0, Math.round(Number(options.smoothSteps)))
+      : 2,
+    alphaMax: Number.isFinite(Number(options.alphaMax))
+      ? Math.max(0, Number(options.alphaMax))
+      : 1.0,
+    speckleRadius: Number.isFinite(Number(options.speckleRadius))
+      ? Math.max(0, Number(options.speckleRadius))
+      : 1.5,
     numberofcolors: palette
       ? palette.length
-      : Math.round(clamp(options.numberofcolors, 2, 16)),
+      : Number.isFinite(Number(options.numberofcolors))
+      ? Math.max(2, Math.round(Number(options.numberofcolors)))
+      : 8,
     ...(palette ? { palette } : {}),
-    pathomit: Math.round(clamp(options.pathomit, 2, 250)),
-    ltres: clamp(options.ltres, 0.1, 4),
-    qtres: clamp(options.qtres, 0.1, 4),
+    kmeansDistance:
+      typeof options.kmeansDistance === "string"
+        ? options.kmeansDistance
+        : "perceptual",
+    pathomit: Number.isFinite(Number(options.pathomit))
+      ? Math.max(0, Math.round(Number(options.pathomit)))
+      : 12,
+    ltres: Number.isFinite(Number(options.ltres))
+      ? Math.max(0.0001, Number(options.ltres))
+      : 1.0,
+    qtres: Number.isFinite(Number(options.qtres))
+      ? Math.max(0.0001, Number(options.qtres))
+      : 1.0,
     traceScalePercent: Number.isFinite(requestedTraceScalePercent)
       ? Math.round(clamp(requestedTraceScalePercent, 1, 100))
       : 50,
     invert: Boolean(options.invert),
-    blur: Math.round(clamp(options.blur, 0, 10)),
-    threshold: Math.round(clamp(options.threshold, 0, 255)),
+    blur: Number.isFinite(Number(options.blur))
+      ? Math.max(0, Math.round(Number(options.blur)))
+      : 0,
+    threshold: Number.isFinite(Number(options.threshold))
+      ? Math.round(clamp(Number(options.threshold), 0, 255))
+      : 128,
     stackColors: Boolean(options.stackColors),
   };
 }
@@ -174,40 +235,29 @@ async function traceSelectedImage(options: TraceOptions): Promise<void> {
   const selection = figma.currentPage.selection;
 
   if (selection.length !== 1) {
-    reportError("Select exactly one layer with an image fill, then click Trace.");
+    reportError("Select exactly one layer to trace, then click Place traced vector.");
     return;
   }
 
   sourceNode = selection[0];
-  const imagePaint = getSelectedImagePaint(sourceNode);
-  if (!imagePaint || !imagePaint.imageHash) {
-    reportError("The selected layer does not have a usable image fill.");
-    return;
-  }
-
-  const image = figma.getImageByHash(imagePaint.imageHash);
-  if (!image) {
-    reportError("Figma could not read the selected image.");
-    return;
-  }
 
   try {
-    postStatus("Reading image data…", false, true);
-    const bytes = await image.getBytesAsync();
+    postStatus("Reading layer data…", false, true);
+    const bytes = await getNodeBytes(sourceNode, options.sourceMode || currentSourceMode);
     if (bytes.length === 0) {
-      reportError("The selected image has no readable data.");
+      reportError("The selected layer produced no image data.");
       return;
     }
 
-    postStatus("Tracing image…", false, true);
+    postStatus("Tracing layer in background…", false, true);
     figma.ui.postMessage({
       type: "TRACE_IMAGE",
       bytes,
       options: normalizeOptions(options),
     });
   } catch (error) {
-    console.error("Unable to read image bytes:", error);
-    reportError("Unable to read the selected image data.");
+    console.error("Unable to read layer bytes:", error);
+    reportError("Unable to capture the selected layer.");
   }
 }
 
@@ -276,8 +326,27 @@ function addPathLoop(
           y: (2 / 3) * (controlY - startPoint.y),
         },
         tangentEnd: {
-          x: (2 /3) * (controlX - endPoint.x),
+          x: (2 / 3) * (controlX - endPoint.x),
           y: (2 / 3) * (controlY - endPoint.y),
+        },
+      };
+    } else if (segment.type === "C") {
+      const startPoint = network.vertices[start];
+      const endPoint = network.vertices[end];
+      const cp1X = segment.x2 * scaleX - offsetX;
+      const cp1Y = segment.y2 * scaleY - offsetY;
+      const cp2X = (segment.x3 !== undefined ? segment.x3 : segment.x2) * scaleX - offsetX;
+      const cp2Y = (segment.y3 !== undefined ? segment.y3 : segment.y2) * scaleY - offsetY;
+      vectorSegment = {
+        start,
+        end,
+        tangentStart: {
+          x: cp1X - startPoint.x,
+          y: cp1Y - startPoint.y,
+        },
+        tangentEnd: {
+          x: cp2X - endPoint.x,
+          y: cp2Y - endPoint.y,
         },
       };
     } else {
@@ -305,6 +374,7 @@ async function createNativeTrace(
   const vectors: VectorNode[] = [];
 
   try {
+    let processedPaths = 0;
     for (const layer of trace.layers) {
       for (let pathIndex = 0; pathIndex < layer.paths.length; pathIndex += 1) {
         const path = layer.paths[pathIndex];
@@ -320,8 +390,17 @@ async function createNativeTrace(
           }
         }
 
-        const offsetX = Math.min(...allPathSegments.map((segment) => segment.x1 * scaleX));
-        const offsetY = Math.min(...allPathSegments.map((segment) => segment.y1 * scaleY));
+        let minX = Infinity;
+        let minY = Infinity;
+        for (let i = 0; i < allPathSegments.length; i += 1) {
+          const sx = allPathSegments[i].x1 * scaleX;
+          const sy = allPathSegments[i].y1 * scaleY;
+          if (sx < minX) minX = sx;
+          if (sy < minY) minY = sy;
+        }
+        const offsetX = minX;
+        const offsetY = minY;
+
         const network = { vertices: [] as VectorVertex[], segments: [] as VectorSegment[] };
         const loops: number[][] = [];
 
@@ -346,6 +425,12 @@ async function createNativeTrace(
         vector.x = baseX + offsetX;
         vector.y = baseY + offsetY;
         vectors.push(vector);
+
+        processedPaths += 1;
+        // Yield periodically so Figma UI stays responsive on large traces
+        if (processedPaths % 40 === 0) {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
       }
     }
 
@@ -370,6 +455,12 @@ async function handleUiMessage(message: PluginMessage): Promise<void> {
   if (message.type === "UI_READY") {
     uiReady = true;
     await refreshSelectionPreview();
+    return;
+  }
+
+  if (message.type === "CHANGE_SOURCE_MODE") {
+    currentSourceMode = message.sourceMode;
+    await refreshSelectionPreview(currentSourceMode);
     return;
   }
 

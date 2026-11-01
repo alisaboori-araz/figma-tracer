@@ -21,6 +21,29 @@
       .field-head, .check { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
       label { color: #f4f4f4; }
       output { color: #fff; font-variant-numeric: tabular-nums; }
+      .num-input {
+        width: 58px;
+        height: 22px;
+        padding: 0 5px;
+        border: 1px solid #505050;
+        border-radius: 3px;
+        background: #383838;
+        color: #fff;
+        font: 11px Inter, Arial, sans-serif;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+        -moz-appearance: textfield;
+      }
+      .num-input::-webkit-outer-spin-button,
+      .num-input::-webkit-inner-spin-button {
+        -webkit-appearance: none;
+        margin: 0;
+      }
+      .num-input:focus {
+        border-color: #4c9aff;
+        outline: none;
+        background: #404040;
+      }
       input[type="range"] { width: 100%; margin: 1px 0 0; accent-color: #4c9aff; }
       input[type="checkbox"] { width: 14px; height: 14px; margin: 0; accent-color: #4c9aff; }
       select { width: 100%; height: 28px; padding: 0 6px; color: #fff; border: 1px solid #505050; border-radius: 3px; background: #383838; font: inherit; }
@@ -34,9 +57,7 @@
       summary { color: #f4f4f4; cursor: pointer; user-select: none; }
       details .advanced-fields { padding-top: 14px; }
       .preview-controls { padding-bottom: 10px; }
-      .subtle { margin: -4px 0 0; color: #999; font-size: 11px; line-height: 1.4; }
-      .performance-warning { margin: 7px 0 0; color: #ffbd66; font-size: 11px; line-height: 1.4; }
-      .performance-warning[hidden] { display: none; }
+      .subtle { margin: 0; color: #999; font-size: 11px; line-height: 1.4; }
       .workspace { display: flex; flex-direction: column; min-width: 0; padding: 16px; background: #303030; }
       .notice { display: flex; justify-content: space-between; align-items: center; min-height: 46px; margin-bottom: 16px; padding: 0 14px; border-radius: 4px; color: #dce6ff; background: #424b70; }
       .notice small { color: #8fc3ff; }
@@ -67,100 +88,829 @@
           <div class="field check"><label for="fade-image">Fade image</label><input id="fade-image" type="checkbox" /></div>
         </section>
         <section class="section">
+          <div class="section-title"><span>Image source</span></div>
+          <div class="field">
+            <select id="source-mode">
+              <option value="rendered" selected>Rendered layer (canvas appearance)</option>
+              <option value="original">Original image file (raw background)</option>
+            </select>
+          </div>
+          <p id="source-hint" class="subtle">Captures the exact visible layer with cropping, masks &amp; nested elements.</p>
+        </section>
+        <section class="section">
           <div class="section-title"><span>Pre-processing</span></div>
           <div id="bw-panel" class="mode-panel">
             <div class="field check"><label for="invert">Invert image</label><input id="invert" type="checkbox" /></div>
-            <div class="field"><div class="field-head"><label for="blur">Blur</label><output id="blur-value">0</output></div><input id="blur" type="range" min="0" max="10" value="0" /></div>
-            <div class="field"><div class="field-head"><label for="threshold">Threshold</label><output id="threshold-value">128</output></div><input id="threshold" type="range" min="0" max="255" value="128" /></div>
+            <div class="field">
+              <div class="field-head"><label for="blur">Blur</label><input id="blur-num" type="number" class="num-input" step="any" value="0" /></div>
+              <input id="blur" type="range" min="0" max="20" step="1" value="0" />
+            </div>
+            <div class="field">
+              <div class="field-head"><label for="threshold">Threshold</label><input id="threshold-num" type="number" class="num-input" step="any" value="128" /></div>
+              <input id="threshold" type="range" min="0" max="255" step="1" value="128" />
+            </div>
           </div>
           <div id="color-panel" class="mode-panel" hidden>
             <div class="field check"><label for="stack-colors">Stack colours</label><input id="stack-colors" type="checkbox" checked /></div>
-            <div class="field"><div class="field-head"><label for="colors">Number of colours</label><output id="colors-value">8</output></div><input id="colors" type="range" min="2" max="16" value="8" /></div>
-            <div class="field"><div class="field-head"><label>Palette</label><output id="palette-count">8 colours</output></div><div id="palette" class="palette" aria-label="Editable trace palette"></div></div>
+            <div class="field">
+              <div class="field-head"><label for="colors">Number of colours (k)</label><input id="colors-num" type="number" class="num-input" step="any" value="8" /></div>
+              <input id="colors" type="range" min="2" max="32" step="1" value="8" />
+            </div>
+            <div class="field">
+              <div class="field-head">
+                <label>Palette</label>
+                <div style="display:flex;align-items:center;gap:8px;">
+                  <output id="palette-count">8 colours</output>
+                  <button id="kmeans-rerun" type="button" class="reset" title="Re-run K-means clustering">Re-cluster</button>
+                </div>
+              </div>
+              <div id="palette" class="palette" aria-label="Editable trace palette"></div>
+            </div>
+            <details open>
+              <summary>K-Means parameters</summary>
+              <div class="advanced-fields">
+                <div class="field">
+                  <div class="field-head"><label for="kmeans-cycles">Max iterations</label><input id="kmeans-cycles-num" type="number" class="num-input" step="any" value="10" /></div>
+                  <input id="kmeans-cycles" type="range" min="1" max="50" step="1" value="10" />
+                </div>
+                <div class="field">
+                  <label for="kmeans-init">Initialization</label>
+                  <select id="kmeans-init">
+                    <option value="kmeans_plus" selected>K-Means++ (Smart spread)</option>
+                    <option value="random">Random sampling</option>
+                    <option value="grid">Grid (Deterministic)</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="kmeans-distance">Distance metric</label>
+                  <select id="kmeans-distance">
+                    <option value="perceptual" selected>Perceptual (Human eye)</option>
+                    <option value="euclidean">Euclidean (RGB)</option>
+                    <option value="manhattan">Manhattan (Fast)</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="kmeans-sample">Sample quality</label>
+                  <select id="kmeans-sample">
+                    <option value="fast">Fast (~10k pixels)</option>
+                    <option value="balanced" selected>Balanced (~30k pixels)</option>
+                    <option value="high">High (~100k pixels)</option>
+                  </select>
+                </div>
+              </div>
+            </details>
           </div>
         </section>
         <section class="section">
           <div class="section-title"><span>Tracing</span></div>
+          <div class="field">
+            <label for="curve-algorithm">Smoothing algorithm</label>
+            <select id="curve-algorithm">
+              <option value="potrace" selected>Potrace (Smooth &amp; Natural)</option>
+              <option value="standard">Standard (Original)</option>
+            </select>
+          </div>
+          <div id="potrace-controls">
+            <div class="field">
+              <div class="field-head">
+                <label for="smooth-steps">Smoothing steps</label>
+                <input id="smooth-steps-num" type="number" class="num-input" step="any" value="2" title="Manual entry (no boundary limits)" />
+              </div>
+              <input id="smooth-steps" type="range" min="0" max="20" step="1" value="2" />
+            </div>
+            <div class="field">
+              <div class="field-head">
+                <label for="alpha-max">Corner threshold (α)</label>
+                <input id="alpha-max-num" type="number" class="num-input" step="any" value="1.0" title="Manual entry (no boundary limits)" />
+              </div>
+              <input id="alpha-max" type="range" min="0" max="3" step="0.05" value="1.0" />
+            </div>
+          </div>
           <div id="bw-tracing-panel" class="mode-panel">
-            <div class="field"><div class="field-head"><label for="bw-ignore">Ignore less than</label><output id="bw-ignore-value">12</output></div><input id="bw-ignore" type="range" min="2" max="250" value="12" /></div>
-            <div class="field"><div class="field-head"><label for="bw-smoothness">Smoothness</label><output id="bw-smoothness-value">1.5</output></div><input id="bw-smoothness" type="range" min="1" max="40" value="15" /></div>
-            <div class="field"><div class="field-head"><label for="bw-curve">Curve optimisation</label><output id="bw-curve-value">1.5</output></div><input id="bw-curve" type="range" min="1" max="40" value="15" /></div>
+            <div class="field">
+              <div class="field-head">
+                <label for="bw-ignore">Speckle removal (circle radius px)</label>
+                <input id="bw-ignore-num" type="number" class="num-input" step="any" value="1.5" title="Polylabel circle radius in pixels (no boundary)" />
+              </div>
+              <input id="bw-ignore" type="range" min="0" max="20" step="0.1" value="1.5" />
+            </div>
+            <div class="field">
+              <div class="field-head">
+                <label for="bw-smoothness">Curve tolerance (ε)</label>
+                <input id="bw-smoothness-num" type="number" class="num-input" step="any" value="1.0" title="Manual entry (no boundary limits)" />
+              </div>
+              <input id="bw-smoothness" type="range" min="0.05" max="10" step="0.05" value="1.0" />
+            </div>
           </div>
           <div id="color-tracing-panel" class="mode-panel" hidden>
-            <div class="field"><label for="detail">Detail</label><select id="detail"><option value="low">Low</option><option value="balanced" selected>Balanced</option><option value="high">High</option><option value="custom">Custom</option></select></div>
-            <div class="field"><div class="field-head"><label for="color-ignore">Speckle removal</label><output id="color-ignore-value">12</output></div><input id="color-ignore" type="range" min="2" max="250" value="12" /></div>
+            <div class="field">
+              <label for="detail">Detail preset</label>
+              <select id="detail">
+                <option value="low">Low</option>
+                <option value="balanced" selected>Balanced</option>
+                <option value="high">High</option>
+                <option value="custom">Custom</option>
+              </select>
+            </div>
+            <div class="field">
+              <div class="field-head">
+                <label for="color-ignore">Speckle removal (circle radius px)</label>
+                <input id="color-ignore-num" type="number" class="num-input" step="any" value="1.5" title="Polylabel circle radius in pixels (no boundary)" />
+              </div>
+              <input id="color-ignore" type="range" min="0" max="20" step="0.1" value="1.5" />
+            </div>
             <details>
-              <summary>Advanced</summary>
+              <summary>Advanced tolerance</summary>
               <div class="advanced-fields">
-                <div class="field"><div class="field-head"><label for="color-smoothness">Smoothness</label><output id="color-smoothness-value">1.5</output></div><input id="color-smoothness" type="range" min="1" max="40" value="15" /></div>
-                <div class="field"><div class="field-head"><label for="color-curve">Curve optimisation</label><output id="color-curve-value">1.5</output></div><input id="color-curve" type="range" min="1" max="40" value="15" /></div>
+                <div class="field">
+                  <div class="field-head">
+                    <label for="color-smoothness">Curve tolerance (ε)</label>
+                    <input id="color-smoothness-num" type="number" class="num-input" step="any" value="1.0" title="Manual entry (no boundary limits)" />
+                  </div>
+                  <input id="color-smoothness" type="range" min="0.05" max="10" step="0.05" value="1.0" />
+                </div>
               </div>
             </details>
           </div>
           <div class="field">
-            <div class="field-head"><label for="trace-scale-percent">Image resolution</label><output id="trace-resolution-value">50%</output></div>
+            <div class="field-head">
+              <label for="trace-scale-percent">Image resolution</label>
+              <div style="display:flex;align-items:center;gap:6px;">
+                <span id="trace-resolution-dim" class="subtle"></span>
+                <input id="trace-scale-percent-num" type="number" class="num-input" step="any" value="50" title="Manual percentage" />
+              </div>
+            </div>
             <input id="trace-scale-percent" type="range" min="1" max="100" step="1" value="50" />
-            <p id="performance-warning" class="performance-warning" hidden>Large trace resolution may be slow and could make Figma less responsive.</p>
           </div>
-          <p class="subtle">Complex results are capped to keep Figma responsive.</p>
+          <p class="subtle">Multi-threaded processing enabled for large images.</p>
         </section>
       </aside>
       <section class="workspace">
         <div class="notice"><strong>Preview updates as you adjust settings</strong><small>Scroll over preview to zoom</small></div>
         <div class="canvas-wrap"><canvas id="preview" width="380" height="430" aria-label="Trace preview. Scroll to zoom and double-click to reset zoom." title="Scroll to zoom · Double-click to reset"></canvas></div>
-        <div class="footer"><div id="status">Select one layer with an image fill.</div><div id="progress" hidden><div id="progress-track"><div id="progress-bar"></div></div><span id="progress-label"></span></div><button id="trace" type="button">Place traced vector</button></div>
+        <div class="footer"><div id="status">Select any layer on canvas to trace.</div><div id="progress" hidden><div id="progress-track"><div id="progress-bar"></div></div><span id="progress-label"></span></div><button id="trace" type="button">Place traced vector</button></div>
       </section>
     </div>
     <script>
-      const PALETTE_SAMPLE_SIDE = 300, PERFORMANCE_WARNING_SIDE = 2048, MAX_PATHS = 500, MAX_SEGMENTS = 10000, MIN_PREVIEW_ZOOM = .25, MAX_PREVIEW_ZOOM = 8;
+      const PALETTE_SAMPLE_SIDE = 300, MIN_PREVIEW_ZOOM = .25, MAX_PREVIEW_ZOOM = 8;
       const $ = (id) => document.getElementById(id);
-      const controls = { previewMode: $("preview-mode"), showPath: $("show-path"), showPoints: $("show-points"), fadeImage: $("fade-image"), invert: $("invert"), blur: $("blur"), threshold: $("threshold"), stackColors: $("stack-colors"), colors: $("colors"), detail: $("detail"), bwIgnore: $("bw-ignore"), bwSmoothness: $("bw-smoothness"), bwCurve: $("bw-curve"), colorIgnore: $("color-ignore"), colorSmoothness: $("color-smoothness"), colorCurve: $("color-curve"), traceScalePercent: $("trace-scale-percent") };
+      const controls = {
+        previewMode: $("preview-mode"),
+        showPath: $("show-path"),
+        showPoints: $("show-points"),
+        fadeImage: $("fade-image"),
+        sourceMode: $("source-mode"),
+        invert: $("invert"),
+        blur: $("blur"),
+        blurNum: $("blur-num"),
+        threshold: $("threshold"),
+        thresholdNum: $("threshold-num"),
+        stackColors: $("stack-colors"),
+        colors: $("colors"),
+        colorsNum: $("colors-num"),
+        kmeansCycles: $("kmeans-cycles"),
+        kmeansCyclesNum: $("kmeans-cycles-num"),
+        kmeansInit: $("kmeans-init"),
+        kmeansDistance: $("kmeans-distance"),
+        kmeansSample: $("kmeans-sample"),
+        curveAlgorithm: $("curve-algorithm"),
+        smoothSteps: $("smooth-steps"),
+        smoothStepsNum: $("smooth-steps-num"),
+        alphaMax: $("alpha-max"),
+        alphaMaxNum: $("alpha-max-num"),
+        detail: $("detail"),
+        bwIgnore: $("bw-ignore"),
+        bwIgnoreNum: $("bw-ignore-num"),
+        bwSmoothness: $("bw-smoothness"),
+        bwSmoothnessNum: $("bw-smoothness-num"),
+        colorIgnore: $("color-ignore"),
+        colorIgnoreNum: $("color-ignore-num"),
+        colorSmoothness: $("color-smoothness"),
+        colorSmoothnessNum: $("color-smoothness-num"),
+        traceScalePercent: $("trace-scale-percent"),
+        traceScalePercentNum: $("trace-scale-percent-num")
+      };
       const previewCanvas = $("preview"), previewContext = previewCanvas.getContext("2d"), traceButton = $("trace"), statusElement = $("status");
-      const detailPresets = { low: { ltres: 2.5, qtres: 2.5 }, balanced: { ltres: 1.5, qtres: 1.5 }, high: { ltres: .75, qtres: .75 } };
+      const detailPresets = { low: { ltres: 2.5 }, balanced: { ltres: 1.0 }, high: { ltres: 0.5 } };
       let mode = "bw", sourceImage = null, cachedTrace = null, traceTimer = null, palette = null, previewZoom = 1, previewPanX = 0, previewPanY = 0, traceWorker = null, traceRequestId = 0;
 
-      function activeTraceControls() { return mode === "color" ? { pathomit:+controls.colorIgnore.value, ltres:+controls.colorSmoothness.value / 10, qtres:+controls.colorCurve.value / 10 } : { pathomit:+controls.bwIgnore.value, ltres:+controls.bwSmoothness.value / 10, qtres:+controls.bwCurve.value / 10 }; }
-      function options() { const trace=activeTraceControls(); return { mode, numberofcolors:mode==="color"&&palette?palette.length:+controls.colors.value, palette:mode==="color"&&palette?palette.map(color=>({...color})):undefined, pathomit:trace.pathomit, ltres:trace.ltres, qtres:trace.qtres, traceScalePercent:+controls.traceScalePercent.value, invert:controls.invert.checked, blur:+controls.blur.value, threshold:+controls.threshold.value, stackColors:controls.stackColors.checked }; }
-      function setStatus(message, isError) { statusElement.textContent=message; statusElement.classList.toggle("error",!!isError); }
-      function setProgress(percent, label) { const holder=$("progress"),bar=$("progress-bar"),text=$("progress-label"); if(percent===null){holder.hidden=true;bar.style.width="0%";text.textContent="";return;} holder.hidden=false;bar.style.width=`${Math.max(0,Math.min(100,percent))}%`;text.textContent=label||`${Math.round(percent)}%`; }
-      function traceDimensions(image=sourceImage, percent=+controls.traceScalePercent.value) { return image ? { width:Math.max(1,Math.round(image.naturalWidth*percent/100)), height:Math.max(1,Math.round(image.naturalHeight*percent/100)) } : null; }
-      function updateResolutionLabel() { const percent=+controls.traceScalePercent.value, dimensions=traceDimensions(), output=$("trace-resolution-value"), warning=$("performance-warning"); output.textContent=dimensions?`${percent}% — ${dimensions.width} × ${dimensions.height} px`:`${percent}%`; warning.hidden=!dimensions||Math.max(dimensions.width,dimensions.height)<=PERFORMANCE_WARNING_SIDE; }
-      function labels() { $("blur-value").textContent=controls.blur.value; $("threshold-value").textContent=controls.threshold.value; $("colors-value").textContent=controls.colors.value; $("palette-count").textContent=`${palette?palette.length:+controls.colors.value} colours`; $("bw-ignore-value").textContent=controls.bwIgnore.value; $("bw-smoothness-value").textContent=(+controls.bwSmoothness.value/10).toFixed(1); $("bw-curve-value").textContent=(+controls.bwCurve.value/10).toFixed(1); $("color-ignore-value").textContent=controls.colorIgnore.value; $("color-smoothness-value").textContent=(+controls.colorSmoothness.value/10).toFixed(1); $("color-curve-value").textContent=(+controls.colorCurve.value/10).toFixed(1); updateResolutionLabel(); }
-      function rgbHex(color) { return `#${[color.r,color.g,color.b].map(value=>value.toString(16).padStart(2,"0")).join("")}`; }
-      function hexRgb(hex) { return { r:parseInt(hex.slice(1,3),16), g:parseInt(hex.slice(3,5),16), b:parseInt(hex.slice(5,7),16) }; }
-      function renderPalette() { const holder=$("palette"); holder.textContent=""; if(!palette){labels();return;} palette.forEach((color,index)=>{ const swatch=document.createElement("div"), input=document.createElement("input"), remove=document.createElement("button"); swatch.className="swatch";swatch.style.backgroundColor=`rgba(${color.r},${color.g},${color.b},${color.a/255})`; input.type="color";input.value=rgbHex(color);input.title=`Edit colour ${index+1}`;input.setAttribute("aria-label",`Edit colour ${index+1}`);input.addEventListener("input",()=>{const rgb=hexRgb(input.value);palette[index]={...color,...rgb};renderPalette();schedulePreview();}); remove.className="swatch-remove";remove.type="button";remove.textContent="×";remove.title="Remove colour";remove.setAttribute("aria-label",`Remove colour ${index+1}`);remove.disabled=palette.length<=2;remove.addEventListener("click",()=>{if(palette.length<=2)return;palette.splice(index,1);renderPalette();schedulePreview();});swatch.append(input,remove);holder.append(swatch); }); labels(); }
-      function extractPalette() { if(!sourceImage)return; const scale=Math.min(1,PALETTE_SAMPLE_SIDE/Math.max(sourceImage.naturalWidth,sourceImage.naturalHeight)), prepared=prepareImage(sourceImage,{mode:"color",blur:0},Math.max(1,Math.round(sourceImage.naturalWidth*scale)),Math.max(1,Math.round(sourceImage.naturalHeight*scale))); const quantified=ImageTracer.colorquantization(prepared.data,{numberofcolors:+controls.colors.value,colorsampling:2,colorquantcycles:3,mincolorratio:0,blurradius:0}); palette=quantified.palette.map(color=>({r:color.r,g:color.g,b:color.b,a:color.a}));renderPalette(); }
-      function setMode(next) { mode=next; document.querySelectorAll(".tab").forEach(t=>t.classList.toggle("active",t.dataset.mode===mode)); $("bw-panel").hidden=mode!=="bw"; $("color-panel").hidden=mode!=="color"; $("bw-tracing-panel").hidden=mode!=="bw"; $("color-tracing-panel").hidden=mode!=="color"; if(mode==="color"&&!palette)extractPalette(); schedulePreview(); }
-      function reset() { mode="bw"; controls.previewMode.value="original"; controls.showPath.checked=true; controls.showPoints.checked=true; controls.fadeImage.checked=false; controls.invert.checked=false; controls.blur.value=0; controls.threshold.value=128; controls.stackColors.checked=true; controls.colors.value=8; controls.detail.value="balanced"; controls.bwIgnore.value=12; controls.bwSmoothness.value=15; controls.bwCurve.value=15; controls.colorIgnore.value=12; controls.colorSmoothness.value=15; controls.colorCurve.value=15; controls.traceScalePercent.value=50; previewZoom=1;previewPanX=0;previewPanY=0; palette=null; if(sourceImage)extractPalette(); renderPalette(); labels(); setMode("bw"); }
-      function loadImage(bytes) { return new Promise((resolve,reject)=>{ const url=URL.createObjectURL(new Blob([bytes],{type:"application/octet-stream"})), image=new Image(); image.onload=()=>{URL.revokeObjectURL(url);resolve(image)}; image.onerror=()=>{URL.revokeObjectURL(url);reject(new Error("Unable to load preview image."))}; image.src=url; }); }
-      function prepareImage(image, settings, width, height) { const canvas=document.createElement("canvas"), context=canvas.getContext("2d",{willReadFrequently:true}); canvas.width=width;canvas.height=height;context.filter=settings.blur?`blur(${settings.blur}px)`:"none";context.drawImage(image,0,0,width,height);context.filter="none"; const data=context.getImageData(0,0,width,height); if(settings.mode==="bw"){for(let i=0;i<data.data.length;i+=4){const l=.2126*data.data[i]+.7152*data.data[i+1]+.0722*data.data[i+2], v=(l>=settings.threshold)!==settings.invert?255:0;data.data[i]=data.data[i+1]=data.data[i+2]=v;}} return {canvas,data,width,height}; }
-      function preprocess(image, settings, traceScalePercent) { const dimensions=traceDimensions(image,traceScalePercent); return prepareImage(image,settings,dimensions.width,dimensions.height); }
-      function tracePrepared(prepared, settings) { return ImageTracer.imagedataToTracedata(prepared.data,{numberofcolors:settings.mode==="bw"?2:settings.numberofcolors,pal:settings.mode==="color"&&settings.palette?settings.palette.map(color=>({...color})):undefined,colorquantcycles:settings.mode==="color"&&settings.palette?1:3,pathomit:settings.pathomit,ltres:settings.ltres,qtres:settings.qtres,layering:settings.stackColors?0:1,blurradius:0,strokewidth:0,linefilter:true,roundcoords:1}); }
-      function drawBackground() { previewContext.clearRect(0,0,previewCanvas.width,previewCanvas.height); previewContext.fillStyle="#222";previewContext.fillRect(0,0,previewCanvas.width,previewCanvas.height); }
-      function fitting(width,height) { const baseScale=Math.min((previewCanvas.width-24)/width,(previewCanvas.height-24)/height), s=baseScale*previewZoom, w=width*s,h=height*s;return {s,x:(previewCanvas.width-w)/2+previewPanX,y:(previewCanvas.height-h)/2+previewPanY,w,h};}
-      function resetPreviewZoom() { previewZoom=1;previewPanX=0;previewPanY=0;renderPreview(); }
-      function zoomPreview(event) { if(!sourceImage)return;event.preventDefault(); const rect=previewCanvas.getBoundingClientRect(), x=(event.clientX-rect.left)*previewCanvas.width/rect.width, y=(event.clientY-rect.top)*previewCanvas.height/rect.height, settings=options(), dimensions=traceDimensions(sourceImage,settings.traceScalePercent), oldFit=fitting(dimensions.width,dimensions.height), delta=event.deltaY*(event.deltaMode===1?16:event.deltaMode===2?previewCanvas.height:1), nextZoom=Math.min(MAX_PREVIEW_ZOOM,Math.max(MIN_PREVIEW_ZOOM,previewZoom*Math.exp(-delta*.0015))); if(nextZoom===previewZoom)return; const imageX=(x-oldFit.x)/oldFit.s,imageY=(y-oldFit.y)/oldFit.s,baseScale=Math.min((previewCanvas.width-24)/dimensions.width,(previewCanvas.height-24)/dimensions.height),nextScale=baseScale*nextZoom,nextWidth=dimensions.width*nextScale,nextHeight=dimensions.height*nextScale; previewZoom=nextZoom;previewPanX=x-imageX*nextScale-(previewCanvas.width-nextWidth)/2;previewPanY=y-imageY*nextScale-(previewCanvas.height-nextHeight)/2;renderPreview(); }
-      function drawImagePreview(prepared, fit) { const temp=document.createElement("canvas"),ctx=temp.getContext("2d");temp.width=prepared.width;temp.height=prepared.height;ctx.putImageData(prepared.data,0,0);previewContext.drawImage(temp,fit.x,fit.y,fit.w,fit.h); }
-      function appendCanvasPath(path, fit) { const segs=path.segments;if(!segs.length)return;previewContext.moveTo(fit.x+segs[0].x1*fit.s,fit.y+segs[0].y1*fit.s);segs.forEach(seg=>{if(seg.type==="Q")previewContext.quadraticCurveTo(fit.x+seg.x2*fit.s,fit.y+seg.y2*fit.s,fit.x+seg.x3*fit.s,fit.y+seg.y3*fit.s);else previewContext.lineTo(fit.x+seg.x2*fit.s,fit.y+seg.y2*fit.s);});previewContext.closePath();}
-      function drawTrace(tracedata, prepared, fit, fillPaths) { tracedata.layers.forEach((paths,layerIndex)=>{const color=tracedata.palette[layerIndex], fill=`rgba(${color.r},${color.g},${color.b},${color.a/255})`;paths.forEach(path=>{if(path.isholepath)return;previewContext.beginPath();appendCanvasPath(path,fit);(path.holechildren||[]).forEach(index=>appendCanvasPath(paths[index],fit));if(fillPaths){previewContext.fillStyle=fill;previewContext.fill("evenodd");}if(controls.showPath.checked){previewContext.strokeStyle="#ff3b30";previewContext.lineWidth=1;previewContext.stroke();}if(controls.showPoints.checked){previewContext.fillStyle="#4cbeff";path.segments.forEach(seg=>{previewContext.beginPath();previewContext.arc(fit.x+seg.x1*fit.s,fit.y+seg.y1*fit.s,2,0,Math.PI*2);previewContext.fill();});}});});}
-      function renderPreview() { drawBackground(); if(!sourceImage)return; try { const settings=options(), prepared=preprocess(sourceImage,settings,settings.traceScalePercent), fit=fitting(prepared.width,prepared.height), original=controls.previewMode.value==="original"; if(original){ previewContext.globalAlpha=controls.fadeImage.checked?.35:1;previewContext.drawImage(sourceImage,fit.x,fit.y,fit.w,fit.h);previewContext.globalAlpha=1; }else if(controls.fadeImage.checked){previewContext.globalAlpha=.3;drawImagePreview(prepared,fit);previewContext.globalAlpha=1;} if(!cachedTrace)cachedTrace=tracePrepared(prepared,settings); drawTrace(cachedTrace,prepared,fit,!original); } catch(error) { setStatus(error.message||"Unable to render preview.",true); } }
-      function schedulePreview() { cachedTrace=null;clearTimeout(traceTimer);traceTimer=setTimeout(renderPreview,150); }
-      function getTraceWorker() { if(traceWorker)return traceWorker; const workerCode=`/*IMAGE_TRACER*/ self.onmessage=function(event){try{const job=event.data;self.postMessage({type:"progress",requestId:job.requestId,percent:55,label:"Tracing contours…"});const tracedata=ImageTracer.imagedataToTracedata({data:new Uint8ClampedArray(job.buffer),width:job.width,height:job.height},{numberofcolors:job.settings.mode==="bw"?2:job.settings.numberofcolors,pal:job.settings.mode==="color"&&job.settings.palette?job.settings.palette.map(function(color){return Object.assign({},color)}):undefined,colorquantcycles:job.settings.mode==="color"&&job.settings.palette?1:3,pathomit:job.settings.pathomit,ltres:job.settings.ltres,qtres:job.settings.qtres,layering:job.settings.stackColors?0:1,blurradius:0,strokewidth:0,linefilter:true,roundcoords:1});let paths=0,segs=0;const layers=tracedata.layers.map(function(layer,index){return{color:tracedata.palette[index],paths:layer.map(function(path){paths++;segs+=path.segments.length;return{segments:path.segments.map(function(s){return{type:s.type,x1:s.x1,y1:s.y1,x2:s.x2,y2:s.y2,x3:s.x3,y3:s.y3}}),holechildren:path.holechildren||[],isholepath:!!path.isholepath}})}});if(paths>${MAX_PATHS}||segs>${MAX_SEGMENTS})throw new Error("This image is too detailed to trace safely. Increase Ignore less than or lower the resolution percentage.");self.postMessage({type:"result",requestId:job.requestId,trace:{width:job.width,height:job.height,layers:layers}});}catch(error){self.postMessage({type:"error",requestId:event.data.requestId,message:error.message||"Image tracing failed."});}};`.replace("/*IMAGE_TRACER*/",IMAGE_TRACER_SOURCE); traceWorker=new Worker(URL.createObjectURL(new Blob([workerCode],{type:"text/javascript"}))); traceWorker.onmessage=function(event){const message=event.data;if(message.requestId!==traceRequestId)return;if(message.type==="progress"){setProgress(message.percent,message.label);return;}setProgress(null);traceButton.disabled=false;if(message.type==="result")parent.postMessage({pluginMessage:{type:"TRACE_RESULT",trace:message.trace}},"*");else parent.postMessage({pluginMessage:{type:"TRACE_ERROR",message:message.message}},"*");}; traceWorker.onerror=function(){setProgress(null);traceButton.disabled=false;parent.postMessage({pluginMessage:{type:"TRACE_ERROR",message:"The background tracing worker stopped unexpectedly."}},"*");};return traceWorker; }
-      async function traceImage(message) { try { setProgress(25,"Preparing image…"); const image=await loadImage(message.bytes instanceof Uint8Array?message.bytes:new Uint8Array(message.bytes)), prepared=preprocess(image,message.options,message.options.traceScalePercent), worker=getTraceWorker(), requestId=++traceRequestId; setProgress(40,"Starting background trace…"); worker.postMessage({requestId,buffer:prepared.data.data.buffer,width:prepared.width,height:prepared.height,settings:message.options},[prepared.data.data.buffer]); } catch(error) { setProgress(null);traceButton.disabled=false; parent.postMessage({pluginMessage:{type:"TRACE_ERROR",message:error.message||"Image tracing failed."}},"*"); } }
-      function applyDetailPreset() { const preset=detailPresets[controls.detail.value];if(!preset)return;controls.colorSmoothness.value=Math.round(preset.ltres*10);controls.colorCurve.value=Math.round(preset.qtres*10);labels();schedulePreview(); }
-      document.querySelectorAll(".tab").forEach(tab=>tab.addEventListener("click",()=>setMode(tab.dataset.mode)));
-      $("reset").addEventListener("click",reset);
-      controls.colors.addEventListener("input",()=>{extractPalette();labels();schedulePreview();});
-      controls.detail.addEventListener("input",applyDetailPreset);
-      [controls.colorSmoothness,controls.colorCurve].forEach(control=>control.addEventListener("input",()=>{controls.detail.value="custom";labels();schedulePreview();}));
-      Object.values(controls).filter(control=>![controls.colors,controls.detail,controls.colorSmoothness,controls.colorCurve,controls.traceScalePercent].includes(control)).forEach(control=>control.addEventListener("input",()=>{labels();schedulePreview();}));
-      controls.traceScalePercent.addEventListener("input",updateResolutionLabel);
-      controls.traceScalePercent.addEventListener("change",schedulePreview);
-      previewCanvas.addEventListener("wheel",zoomPreview,{passive:false});
-      previewCanvas.addEventListener("dblclick",resetPreviewZoom);
-      traceButton.addEventListener("click",()=>{const dimensions=traceDimensions();if(dimensions&&Math.max(dimensions.width,dimensions.height)>PERFORMANCE_WARNING_SIDE&&!window.confirm(`This trace will use ${dimensions.width} × ${dimensions.height} px and may be slow or make Figma less responsive. Continue?`))return;traceButton.disabled=true;setProgress(10,"Reading image…");setStatus("Tracing image in background…");parent.postMessage({pluginMessage:{type:"TRACE_REQUEST",options:options()}},"*");});
-      window.onmessage=async event=>{const message=event.data&&event.data.pluginMessage;if(!message)return;if(message.type==="PREVIEW_IMAGE"){try{sourceImage=await loadImage(message.bytes instanceof Uint8Array?message.bytes:new Uint8Array(message.bytes));previewZoom=1;previewPanX=0;previewPanY=0;palette=null;extractPalette();labels();schedulePreview();}catch(error){setStatus(error.message,true)}}else if(message.type==="TRACE_IMAGE")traceImage(message);else if(message.type==="STATUS"){setStatus(message.message,message.isError);traceButton.disabled=!!message.busy;}};
-      reset(); setProgress(null); parent.postMessage({pluginMessage:{type:"UI_READY"}},"*");
+      function activeTraceControls() {
+        if (mode === "color") {
+          return {
+            speckleRadius: controls.colorIgnoreNum ? parseFloat(controls.colorIgnoreNum.value) : 1.5,
+            pathomit: 0,
+            ltres: controls.colorSmoothnessNum ? parseFloat(controls.colorSmoothnessNum.value) : 1.0,
+            qtres: controls.colorSmoothnessNum ? parseFloat(controls.colorSmoothnessNum.value) : 1.0
+          };
+        } else {
+          return {
+            speckleRadius: controls.bwIgnoreNum ? parseFloat(controls.bwIgnoreNum.value) : 1.5,
+            pathomit: 0,
+            ltres: controls.bwSmoothnessNum ? parseFloat(controls.bwSmoothnessNum.value) : 1.0,
+            qtres: controls.bwSmoothnessNum ? parseFloat(controls.bwSmoothnessNum.value) : 1.0
+          };
+        }
+      }
+
+      function options() {
+        const trace = activeTraceControls();
+        const curveAlgo = controls.curveAlgorithm ? controls.curveAlgorithm.value : "potrace";
+        const smoothSteps = controls.smoothStepsNum ? parseFloat(controls.smoothStepsNum.value) : 2;
+        const alphaMax = controls.alphaMaxNum ? parseFloat(controls.alphaMaxNum.value) : 1.0;
+        const numColors = mode === "color" && palette ? palette.length : (controls.colorsNum ? parseFloat(controls.colorsNum.value) : 8);
+
+        return {
+          mode,
+          sourceMode: controls.sourceMode ? controls.sourceMode.value : "rendered",
+          curveAlgorithm: curveAlgo,
+          smoothSteps: isNaN(smoothSteps) ? 2 : Math.max(0, Math.round(smoothSteps)),
+          alphaMax: isNaN(alphaMax) ? 1.0 : Math.max(0, alphaMax),
+          speckleRadius: isNaN(trace.speckleRadius) ? 1.5 : Math.max(0, trace.speckleRadius),
+          numberofcolors: isNaN(numColors) ? 8 : Math.max(2, Math.round(numColors)),
+          palette: mode === "color" && palette ? palette.map(color => ({ ...color })) : undefined,
+          kmeansDistance: controls.kmeansDistance ? controls.kmeansDistance.value : "perceptual",
+          pathomit: 0,
+          ltres: isNaN(trace.ltres) ? 1.0 : Math.max(0.0001, trace.ltres),
+          qtres: isNaN(trace.qtres) ? 1.0 : Math.max(0.0001, trace.qtres),
+          traceScalePercent: controls.traceScalePercentNum ? Math.max(1, Math.min(100, Math.round(parseFloat(controls.traceScalePercentNum.value) || 50))) : 50,
+          invert: controls.invert.checked,
+          blur: controls.blurNum ? Math.max(0, Math.round(parseFloat(controls.blurNum.value) || 0)) : 0,
+          threshold: controls.thresholdNum ? Math.max(0, Math.min(255, Math.round(parseFloat(controls.thresholdNum.value) || 128))) : 128,
+          stackColors: controls.stackColors.checked
+        };
+      }
+
+      function setStatus(message, isError) {
+        statusElement.textContent = message;
+        statusElement.classList.toggle("error", !!isError);
+      }
+
+      function setProgress(percent, label) {
+        const holder = $("progress"), bar = $("progress-bar"), text = $("progress-label");
+        if (percent === null) {
+          holder.hidden = true;
+          bar.style.width = "0%";
+          text.textContent = "";
+          return;
+        }
+        holder.hidden = false;
+        bar.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+        text.textContent = label || `${Math.round(percent)}%`;
+      }
+
+      function traceDimensions(image = sourceImage, percent = 50) {
+        return image ? {
+          width: Math.max(1, Math.round(image.naturalWidth * percent / 100)),
+          height: Math.max(1, Math.round(image.naturalHeight * percent / 100))
+        } : null;
+      }
+
+      function updateResolutionLabel() {
+        const percent = controls.traceScalePercentNum ? (parseFloat(controls.traceScalePercentNum.value) || 50) : 50;
+        const dimensions = traceDimensions(sourceImage, percent);
+        const dimSpan = $("trace-resolution-dim");
+        if (dimSpan) {
+          dimSpan.textContent = dimensions ? `${dimensions.width}×${dimensions.height}` : "";
+        }
+      }
+
+      function labels() {
+        $("palette-count").textContent = `${palette ? palette.length : (controls.colorsNum ? controls.colorsNum.value : 8)} colours`;
+        updateResolutionLabel();
+      }
+
+      function rgbHex(color) {
+        return `#${[color.r, color.g, color.b].map(value => value.toString(16).padStart(2, "0")).join("")}`;
+      }
+
+      function hexRgb(hex) {
+        return {
+          r: parseInt(hex.slice(1, 3), 16),
+          g: parseInt(hex.slice(3, 5), 16),
+          b: parseInt(hex.slice(5, 7), 16)
+        };
+      }
+
+      function renderPalette() {
+        const holder = $("palette");
+        holder.textContent = "";
+        if (!palette) { labels(); return; }
+        palette.forEach((color, index) => {
+          const swatch = document.createElement("div"), input = document.createElement("input"), remove = document.createElement("button");
+          swatch.className = "swatch";
+          swatch.style.backgroundColor = `rgba(${color.r},${color.g},${color.b},${color.a / 255})`;
+          input.type = "color";
+          input.value = rgbHex(color);
+          input.title = `Edit colour ${index + 1}`;
+          input.setAttribute("aria-label", `Edit colour ${index + 1}`);
+          input.addEventListener("input", () => {
+            const rgb = hexRgb(input.value);
+            palette[index] = { ...color, ...rgb };
+            renderPalette();
+            schedulePreview();
+          });
+          remove.className = "swatch-remove";
+          remove.type = "button";
+          remove.textContent = "×";
+          remove.title = "Remove colour";
+          remove.setAttribute("aria-label", `Remove colour ${index + 1}`);
+          remove.disabled = palette.length <= 2;
+          remove.addEventListener("click", () => {
+            if (palette.length <= 2) return;
+            palette.splice(index, 1);
+            renderPalette();
+            schedulePreview();
+          });
+          swatch.append(input, remove);
+          holder.append(swatch);
+        });
+        labels();
+      }
+
+      function extractPalette() {
+        if (!sourceImage) return;
+        const sampleLimit = controls.kmeansSample ? controls.kmeansSample.value : "balanced";
+        const maxSide = sampleLimit === "high" ? 400 : sampleLimit === "balanced" ? 300 : 200;
+        const scale = Math.min(1, maxSide / Math.max(sourceImage.naturalWidth, sourceImage.naturalHeight));
+        const numColors = controls.colorsNum ? Math.max(2, Math.round(parseFloat(controls.colorsNum.value) || 8)) : 8;
+        const maxIter = controls.kmeansCyclesNum ? Math.max(1, Math.round(parseFloat(controls.kmeansCyclesNum.value) || 10)) : 10;
+        const prepared = prepareImage(
+          sourceImage,
+          { mode: "color", blur: 0 },
+          Math.max(1, Math.round(sourceImage.naturalWidth * scale)),
+          Math.max(1, Math.round(sourceImage.naturalHeight * scale))
+        );
+        const quantified = ImageTracer.kMeansColorQuantization(prepared.data, {
+          numberofcolors: numColors,
+          maxiterations: maxIter,
+          initmethod: controls.kmeansInit ? controls.kmeansInit.value : "kmeans_plus",
+          distancemetric: controls.kmeansDistance ? controls.kmeansDistance.value : "perceptual",
+          samplesize: sampleLimit === "high" ? 100000 : sampleLimit === "balanced" ? 30000 : 10000
+        });
+        palette = quantified.palette.map(color => ({ r: color.r, g: color.g, b: color.b, a: color.a }));
+        renderPalette();
+      }
+
+      function setMode(next) {
+        mode = next;
+        document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.mode === mode));
+        $("bw-panel").hidden = mode !== "bw";
+        $("color-panel").hidden = mode !== "color";
+        $("bw-tracing-panel").hidden = mode !== "bw";
+        $("color-tracing-panel").hidden = mode !== "color";
+        if (mode === "color" && !palette) extractPalette();
+        schedulePreview();
+      }
+
+      function reset() {
+        mode = "bw";
+        controls.previewMode.value = "original";
+        controls.showPath.checked = true;
+        controls.showPoints.checked = true;
+        controls.fadeImage.checked = false;
+        controls.invert.checked = false;
+        controls.blur.value = 0; controls.blurNum.value = 0;
+        controls.threshold.value = 128; controls.thresholdNum.value = 128;
+        controls.stackColors.checked = true;
+        controls.colors.value = 8; controls.colorsNum.value = 8;
+        controls.kmeansCycles.value = 10; controls.kmeansCyclesNum.value = 10;
+        controls.kmeansInit.value = "kmeans_plus";
+        controls.kmeansDistance.value = "perceptual";
+        controls.kmeansSample.value = "balanced";
+        controls.curveAlgorithm.value = "potrace";
+        controls.sourceMode.value = "rendered";
+        if (controls.sourceMode.options[1]) controls.sourceMode.options[1].disabled = false;
+        $("source-hint").textContent = "Captures the exact visible layer with cropping, masks & nested elements.";
+        controls.smoothSteps.value = 2; controls.smoothStepsNum.value = 2;
+        controls.alphaMax.value = 1.0; controls.alphaMaxNum.value = 1.0;
+        controls.detail.value = "balanced";
+        controls.bwIgnore.value = 1.5; controls.bwIgnoreNum.value = 1.5;
+        controls.bwSmoothness.value = 1.0; controls.bwSmoothnessNum.value = 1.0;
+        controls.colorIgnore.value = 1.5; controls.colorIgnoreNum.value = 1.5;
+        controls.colorSmoothness.value = 1.0; controls.colorSmoothnessNum.value = 1.0;
+        controls.traceScalePercent.value = 50; controls.traceScalePercentNum.value = 50;
+        previewZoom = 1; previewPanX = 0; previewPanY = 0;
+        palette = null;
+        $("potrace-controls").hidden = false;
+        if (sourceImage) extractPalette();
+        renderPalette();
+        labels();
+        setMode("bw");
+      }
+
+      function loadImage(bytes) {
+        return new Promise((resolve, reject) => {
+          const url = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
+          const image = new Image();
+          image.onload = () => { URL.revokeObjectURL(url); resolve(image); };
+          image.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Unable to load preview image.")); };
+          image.src = url;
+        });
+      }
+
+      function prepareImage(image, settings, width, height) {
+        const canvas = document.createElement("canvas"), context = canvas.getContext("2d", { willReadFrequently: true });
+        canvas.width = width; canvas.height = height;
+        context.filter = settings.blur ? `blur(${settings.blur}px)` : "none";
+        context.drawImage(image, 0, 0, width, height);
+        context.filter = "none";
+        const data = context.getImageData(0, 0, width, height);
+        if (settings.mode === "bw") {
+          for (let i = 0; i < data.data.length; i += 4) {
+            const l = .2126 * data.data[i] + .7152 * data.data[i + 1] + .0722 * data.data[i + 2];
+            const v = (l >= settings.threshold) !== settings.invert ? 255 : 0;
+            data.data[i] = data.data[i + 1] = data.data[i + 2] = v;
+          }
+        }
+        return { canvas, data, width, height };
+      }
+
+      function preprocess(image, settings, traceScalePercent) {
+        const dimensions = traceDimensions(image, traceScalePercent);
+        return prepareImage(image, settings, dimensions.width, dimensions.height);
+      }
+
+      function tracePrepared(prepared, settings) {
+        return ImageTracer.imagedataToTracedata(prepared.data, {
+          numberofcolors: settings.mode === "bw" ? 2 : settings.numberofcolors,
+          pal: settings.mode === "color" && settings.palette ? settings.palette.map(color => ({ ...color })) : undefined,
+          colorquantcycles: settings.mode === "color" && settings.palette ? 1 : 3,
+          distancemetric: settings.kmeansDistance || "perceptual",
+          curvealgorithm: settings.curveAlgorithm || "potrace",
+          smoothsteps: settings.smoothSteps !== undefined ? settings.smoothSteps : 2,
+          alphamax: settings.alphaMax !== undefined ? settings.alphaMax : 1.0,
+          speckleradius: settings.speckleRadius !== undefined ? settings.speckleRadius : 1.5,
+          pathomit: settings.pathomit,
+          ltres: settings.ltres,
+          qtres: settings.qtres,
+          layering: settings.stackColors ? 0 : 1,
+          blurradius: 0,
+          strokewidth: 0,
+          linefilter: true,
+          roundcoords: 1
+        });
+      }
+
+      function drawBackground() {
+        previewContext.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
+        previewContext.fillStyle = "#222";
+        previewContext.fillRect(0, 0, previewCanvas.width, previewCanvas.height);
+      }
+
+      function fitting(width, height) {
+        const baseScale = Math.min((previewCanvas.width - 24) / width, (previewCanvas.height - 24) / height);
+        const s = baseScale * previewZoom, w = width * s, h = height * s;
+        return { s, x: (previewCanvas.width - w) / 2 + previewPanX, y: (previewCanvas.height - h) / 2 + previewPanY, w, h };
+      }
+
+      function resetPreviewZoom() {
+        previewZoom = 1; previewPanX = 0; previewPanY = 0;
+        renderPreview();
+      }
+
+      function zoomPreview(event) {
+        if (!sourceImage) return;
+        event.preventDefault();
+        const rect = previewCanvas.getBoundingClientRect();
+        const x = (event.clientX - rect.left) * previewCanvas.width / rect.width;
+        const y = (event.clientY - rect.top) * previewCanvas.height / rect.height;
+        const settings = options();
+        const dimensions = traceDimensions(sourceImage, settings.traceScalePercent);
+        const oldFit = fitting(dimensions.width, dimensions.height);
+        const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? previewCanvas.height : 1);
+        const nextZoom = Math.min(MAX_PREVIEW_ZOOM, Math.max(MIN_PREVIEW_ZOOM, previewZoom * Math.exp(-delta * .0015)));
+        if (nextZoom === previewZoom) return;
+        const imageX = (x - oldFit.x) / oldFit.s;
+        const imageY = (y - oldFit.y) / oldFit.s;
+        const baseScale = Math.min((previewCanvas.width - 24) / dimensions.width, (previewCanvas.height - 24) / dimensions.height);
+        const nextScale = baseScale * nextZoom;
+        const nextWidth = dimensions.width * nextScale;
+        const nextHeight = dimensions.height * nextScale;
+        previewZoom = nextZoom;
+        previewPanX = x - imageX * nextScale - (previewCanvas.width - nextWidth) / 2;
+        previewPanY = y - imageY * nextScale - (previewCanvas.height - nextHeight) / 2;
+        renderPreview();
+      }
+
+      function drawImagePreview(prepared, fit) {
+        const temp = document.createElement("canvas"), ctx = temp.getContext("2d");
+        temp.width = prepared.width; temp.height = prepared.height;
+        ctx.putImageData(prepared.data, 0, 0);
+        previewContext.drawImage(temp, fit.x, fit.y, fit.w, fit.h);
+      }
+
+      function appendCanvasPath(path, fit) {
+        const segs = path.segments;
+        if (!segs || !segs.length) return;
+        previewContext.moveTo(fit.x + segs[0].x1 * fit.s, fit.y + segs[0].y1 * fit.s);
+        segs.forEach(seg => {
+          if (seg.type === "C") {
+            previewContext.bezierCurveTo(
+              fit.x + seg.x2 * fit.s, fit.y + seg.y2 * fit.s,
+              fit.x + (seg.x3 !== undefined ? seg.x3 : seg.x2) * fit.s, fit.y + (seg.y3 !== undefined ? seg.y3 : seg.y2) * fit.s,
+              fit.x + (seg.x4 !== undefined ? seg.x4 : seg.x2) * fit.s, fit.y + (seg.y4 !== undefined ? seg.y4 : seg.y2) * fit.s
+            );
+          } else if (seg.type === "Q") {
+            previewContext.quadraticCurveTo(
+              fit.x + seg.x2 * fit.s, fit.y + seg.y2 * fit.s,
+              fit.x + seg.x3 * fit.s, fit.y + seg.y3 * fit.s
+            );
+          } else {
+            previewContext.lineTo(fit.x + seg.x2 * fit.s, fit.y + seg.y2 * fit.s);
+          }
+        });
+        previewContext.closePath();
+      }
+
+      function drawTrace(tracedata, prepared, fit, fillPaths) {
+        tracedata.layers.forEach((paths, layerIndex) => {
+          const color = tracedata.palette[layerIndex];
+          const fill = `rgba(${color.r},${color.g},${color.b},${color.a / 255})`;
+          paths.forEach(path => {
+            if (path.isholepath) return;
+            previewContext.beginPath();
+            appendCanvasPath(path, fit);
+            (path.holechildren || []).forEach(index => appendCanvasPath(paths[index], fit));
+            if (fillPaths) {
+              previewContext.fillStyle = fill;
+              previewContext.fill("evenodd");
+            }
+            if (controls.showPath.checked) {
+              previewContext.strokeStyle = "#ff3b30";
+              previewContext.lineWidth = 1;
+              previewContext.stroke();
+            }
+            if (controls.showPoints.checked) {
+              previewContext.fillStyle = "#4cbeff";
+              path.segments.forEach(seg => {
+                previewContext.beginPath();
+                previewContext.arc(fit.x + seg.x1 * fit.s, fit.y + seg.y1 * fit.s, 2, 0, Math.PI * 2);
+                previewContext.fill();
+              });
+            }
+          });
+        });
+      }
+
+      function renderPreview() {
+        drawBackground();
+        if (!sourceImage) return;
+        try {
+          const settings = options();
+          const prepared = preprocess(sourceImage, settings, settings.traceScalePercent);
+          const fit = fitting(prepared.width, prepared.height);
+          const original = controls.previewMode.value === "original";
+          if (original) {
+            previewContext.globalAlpha = controls.fadeImage.checked ? .35 : 1;
+            previewContext.drawImage(sourceImage, fit.x, fit.y, fit.w, fit.h);
+            previewContext.globalAlpha = 1;
+          } else if (controls.fadeImage.checked) {
+            previewContext.globalAlpha = .3;
+            drawImagePreview(prepared, fit);
+            previewContext.globalAlpha = 1;
+          }
+          if (!cachedTrace) cachedTrace = tracePrepared(prepared, settings);
+          drawTrace(cachedTrace, prepared, fit, !original);
+        } catch (error) {
+          setStatus(error.message || "Unable to render preview.", true);
+        }
+      }
+
+      function schedulePreview() {
+        cachedTrace = null;
+        clearTimeout(traceTimer);
+        traceTimer = setTimeout(renderPreview, 150);
+      }
+
+      function getTraceWorker() {
+        if (traceWorker) return traceWorker;
+        const workerCode = `/*IMAGE_TRACER*/
+self.onmessage = function(event) {
+  try {
+    const job = event.data;
+    self.postMessage({ type: "progress", requestId: job.requestId, percent: 55, label: "Tracing contours…" });
+    const tracedata = ImageTracer.imagedataToTracedata(
+      { data: new Uint8ClampedArray(job.buffer), width: job.width, height: job.height },
+      {
+        numberofcolors: job.settings.mode === "bw" ? 2 : job.settings.numberofcolors,
+        pal: job.settings.mode === "color" && job.settings.palette ? job.settings.palette.map(function(color){ return Object.assign({}, color); }) : undefined,
+        colorquantcycles: job.settings.mode === "color" && job.settings.palette ? 1 : 3,
+        distancemetric: job.settings.kmeansDistance || "perceptual",
+        curvealgorithm: job.settings.curveAlgorithm || "potrace",
+        smoothsteps: job.settings.smoothSteps !== undefined ? job.settings.smoothSteps : 2,
+        alphamax: job.settings.alphaMax !== undefined ? job.settings.alphaMax : 1.0,
+        speckleradius: job.settings.speckleRadius !== undefined ? job.settings.speckleRadius : 1.5,
+        pathomit: job.settings.pathomit,
+        ltres: job.settings.ltres,
+        qtres: job.settings.qtres,
+        layering: job.settings.stackColors ? 0 : 1,
+        blurradius: 0,
+        strokewidth: 0,
+        linefilter: true,
+        roundcoords: 1
+      }
+    );
+    const layers = tracedata.layers.map(function(layer, index) {
+      return {
+        color: tracedata.palette[index],
+        paths: layer.map(function(path) {
+          return {
+            segments: path.segments.map(function(s) {
+              return {
+                type: s.type,
+                x1: s.x1,
+                y1: s.y1,
+                x2: s.x2,
+                y2: s.y2,
+                x3: s.x3,
+                y3: s.y3,
+                x4: s.x4,
+                y4: s.y4
+              };
+            }),
+            holechildren: path.holechildren || [],
+            isholepath: !!path.isholepath
+          };
+        })
+      };
+    });
+    self.postMessage({ type: "result", requestId: job.requestId, trace: { width: job.width, height: job.height, layers: layers } });
+  } catch (error) {
+    self.postMessage({ type: "error", requestId: event.data.requestId, message: error.message || "Image tracing failed." });
+  }
+};`.replace("/*IMAGE_TRACER*/", IMAGE_TRACER_SOURCE);
+
+        traceWorker = new Worker(URL.createObjectURL(new Blob([workerCode], { type: "text/javascript" })));
+        traceWorker.onmessage = function(event) {
+          const message = event.data;
+          if (message.requestId !== traceRequestId) return;
+          if (message.type === "progress") {
+            setProgress(message.percent, message.label);
+            return;
+          }
+          setProgress(null);
+          traceButton.disabled = false;
+          if (message.type === "result") {
+            parent.postMessage({ pluginMessage: { type: "TRACE_RESULT", trace: message.trace } }, "*");
+          } else {
+            parent.postMessage({ pluginMessage: { type: "TRACE_ERROR", message: message.message } }, "*");
+          }
+        };
+        traceWorker.onerror = function() {
+          setProgress(null);
+          traceButton.disabled = false;
+          parent.postMessage({ pluginMessage: { type: "TRACE_ERROR", message: "The background tracing worker stopped unexpectedly." } }, "*");
+        };
+        return traceWorker;
+      }
+
+      async function traceImage(message) {
+        try {
+          setProgress(25, "Preparing image…");
+          const image = await loadImage(message.bytes instanceof Uint8Array ? message.bytes : new Uint8Array(message.bytes));
+          const prepared = preprocess(image, message.options, message.options.traceScalePercent);
+          const worker = getTraceWorker();
+          const requestId = ++traceRequestId;
+          setProgress(40, "Tracing image in background…");
+          worker.postMessage(
+            { requestId, buffer: prepared.data.data.buffer, width: prepared.width, height: prepared.height, settings: message.options },
+            [prepared.data.data.buffer]
+          );
+        } catch (error) {
+          setProgress(null);
+          traceButton.disabled = false;
+          parent.postMessage({ pluginMessage: { type: "TRACE_ERROR", message: error.message || "Image tracing failed." } }, "*");
+        }
+      }
+
+      function applyDetailPreset() {
+        const preset = detailPresets[controls.detail.value];
+        if (!preset) return;
+        controls.colorSmoothness.value = preset.ltres;
+        controls.colorSmoothnessNum.value = preset.ltres;
+        schedulePreview();
+      }
+
+      // Dynamic bidirectional slider + number input synchronization without boundary clamps
+      function syncPair(slider, numInput, isFloat, onChange) {
+        if (!slider || !numInput) return;
+        slider.addEventListener("input", () => {
+          numInput.value = isFloat ? parseFloat(slider.value).toFixed(2).replace(/\.?0+$/, "") : slider.value;
+          if (onChange) onChange();
+        });
+        numInput.addEventListener("input", () => {
+          const val = parseFloat(numInput.value);
+          if (!isNaN(val)) {
+            if (val > parseFloat(slider.max)) slider.max = val;
+            if (val < parseFloat(slider.min)) slider.min = val;
+            slider.value = val;
+            if (onChange) onChange();
+          }
+        });
+        numInput.addEventListener("change", () => {
+          const val = parseFloat(numInput.value);
+          if (isNaN(val)) {
+            numInput.value = slider.value;
+          } else {
+            if (val > parseFloat(slider.max)) slider.max = val;
+            if (val < parseFloat(slider.min)) slider.min = val;
+            slider.value = val;
+          }
+          if (onChange) onChange();
+        });
+      }
+
+      // Connect synchronization for all numeric pairs
+      syncPair(controls.blur, controls.blurNum, false, schedulePreview);
+      syncPair(controls.threshold, controls.thresholdNum, false, schedulePreview);
+      syncPair(controls.colors, controls.colorsNum, false, () => { extractPalette(); labels(); schedulePreview(); });
+      syncPair(controls.kmeansCycles, controls.kmeansCyclesNum, false, () => { extractPalette(); labels(); schedulePreview(); });
+      syncPair(controls.smoothSteps, controls.smoothStepsNum, false, schedulePreview);
+      syncPair(controls.alphaMax, controls.alphaMaxNum, true, schedulePreview);
+      syncPair(controls.bwIgnore, controls.bwIgnoreNum, false, schedulePreview);
+      syncPair(controls.bwSmoothness, controls.bwSmoothnessNum, true, schedulePreview);
+      syncPair(controls.colorIgnore, controls.colorIgnoreNum, false, schedulePreview);
+      syncPair(controls.colorSmoothness, controls.colorSmoothnessNum, true, () => { controls.detail.value = "custom"; schedulePreview(); });
+      syncPair(controls.traceScalePercent, controls.traceScalePercentNum, false, () => { updateResolutionLabel(); schedulePreview(); });
+
+      document.querySelectorAll(".tab").forEach(tab => tab.addEventListener("click", () => setMode(tab.dataset.mode)));
+      $("reset").addEventListener("click", reset);
+      $("kmeans-rerun").addEventListener("click", () => { extractPalette(); labels(); schedulePreview(); });
+      controls.kmeansInit.addEventListener("change", () => { extractPalette(); labels(); schedulePreview(); });
+      controls.kmeansDistance.addEventListener("change", () => { extractPalette(); labels(); schedulePreview(); });
+      controls.kmeansSample.addEventListener("change", () => { extractPalette(); labels(); schedulePreview(); });
+      controls.detail.addEventListener("input", applyDetailPreset);
+
+      controls.sourceMode.addEventListener("change", () => {
+        const modeVal = controls.sourceMode.value;
+        $("source-hint").textContent = modeVal === "rendered"
+          ? "Captures the exact visible layer with cropping, masks & nested elements."
+          : "Traces the original uncropped background file asset.";
+        parent.postMessage({ pluginMessage: { type: "CHANGE_SOURCE_MODE", sourceMode: modeVal } }, "*");
+      });
+
+      controls.curveAlgorithm.addEventListener("change", () => {
+        const isPotrace = controls.curveAlgorithm.value === "potrace";
+        $("potrace-controls").hidden = !isPotrace;
+        schedulePreview();
+      });
+
+      controls.previewMode.addEventListener("change", renderPreview);
+      controls.showPath.addEventListener("change", renderPreview);
+      controls.showPoints.addEventListener("change", renderPreview);
+      controls.fadeImage.addEventListener("change", renderPreview);
+      controls.invert.addEventListener("change", schedulePreview);
+      controls.stackColors.addEventListener("change", schedulePreview);
+
+      previewCanvas.addEventListener("wheel", zoomPreview, { passive: false });
+      previewCanvas.addEventListener("dblclick", resetPreviewZoom);
+
+      traceButton.addEventListener("click", () => {
+        traceButton.disabled = true;
+        setProgress(10, "Reading image…");
+        setStatus("Tracing image in background…");
+        parent.postMessage({ pluginMessage: { type: "TRACE_REQUEST", options: options() } }, "*");
+      });
+
+      window.onmessage = async event => {
+        const message = event.data && event.data.pluginMessage;
+        if (!message) return;
+        if (message.type === "PREVIEW_IMAGE") {
+          try {
+            if (message.hasImagePaint === false) {
+              controls.sourceMode.value = "rendered";
+              if (controls.sourceMode.options[1]) controls.sourceMode.options[1].disabled = true;
+              $("source-hint").textContent = "Selected layer has no image fill; capturing rendered layer appearance.";
+            } else {
+              if (controls.sourceMode.options[1]) controls.sourceMode.options[1].disabled = false;
+              $("source-hint").textContent = controls.sourceMode.value === "rendered"
+                ? "Captures the exact visible layer with cropping, masks & nested elements."
+                : "Traces the original uncropped background file asset.";
+            }
+            sourceImage = await loadImage(message.bytes instanceof Uint8Array ? message.bytes : new Uint8Array(message.bytes));
+            previewZoom = 1; previewPanX = 0; previewPanY = 0;
+            palette = null;
+            extractPalette();
+            labels();
+            schedulePreview();
+          } catch (error) {
+            setStatus(error.message, true);
+          }
+        } else if (message.type === "NO_SELECTION") {
+          sourceImage = null;
+          setStatus("Select any layer on canvas to trace.");
+          drawBackground();
+        } else if (message.type === "TRACE_IMAGE") {
+          traceImage(message);
+        } else if (message.type === "STATUS") {
+          setStatus(message.message, message.isError);
+          traceButton.disabled = !!message.busy;
+        }
+      };
+
+      reset();
+      setProgress(null);
+      parent.postMessage({ pluginMessage: { type: "UI_READY" } }, "*");
     </script>
   </body>
 </html>

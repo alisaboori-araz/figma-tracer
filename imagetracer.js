@@ -117,7 +117,8 @@ function ImageTracer(){
 								
 							_this.pathscan(
 								_this.layeringstep( ii, colornum ),
-								options.pathomit
+								options.pathomit,
+								options
 							),
 							
 							options
@@ -125,8 +126,8 @@ function ImageTracer(){
 						),
 						
 						options.ltres,
-						options.qtres
-						
+						options.qtres,
+						options
 					);
 				
 				// adding traced layer
@@ -142,14 +143,14 @@ function ImageTracer(){
 			if(options.layercontainerid){ _this.drawLayers( ls, _this.specpalette, options.scale, options.layercontainerid ); }
 			
 			// 3. Batch pathscan
-			var bps = _this.batchpathscan( ls, options.pathomit );
+			var bps = _this.batchpathscan( ls, options.pathomit, options );
 			
 			// 4. Batch interpollation
 			var bis = _this.batchinternodes( bps, options );
 			
 			// 5. Batch tracing and creating tracedata object
 			var tracedata = {
-				layers : _this.batchtracelayers( bis, options.ltres, options.qtres ),
+				layers : _this.batchtracelayers( bis, options.ltres, options.qtres, options ),
 				palette : ii.palette,
 				width : imgd.width,
 				height : imgd.height
@@ -170,13 +171,20 @@ function ImageTracer(){
 			ltres : 1,
 			qtres : 1,
 			pathomit : 8,
+			speckleradius : 1.5,
 			rightangleenhance : true,
+			curvealgorithm : 'potrace',
+			smoothsteps : 2,
+			alphamax : 1.0,
+			opttolerance : 0.8,
 			
 			// Color quantization
 			colorsampling : 2,
 			numberofcolors : 16,
 			mincolorratio : 0,
 			colorquantcycles : 3,
+			distancemetric : 'perceptual',
+			maxiterations : 10,
 			
 			// Layering method
 			layering : 0,
@@ -266,8 +274,10 @@ function ImageTracer(){
 			palette = _this.generatepalette(options.numberofcolors);
 		}else if(options.colorsampling === 1){
 			palette = _this.samplepalette( options.numberofcolors, imgd );
-		}else{
+		}else if(options.colorsampling === 2){
 			palette = _this.samplepalette2( options.numberofcolors, imgd );
+		}else{
+			palette = _this.kMeansColorQuantization( imgd, options ).palette;
 		}
 		
 		// Selective Gaussian blur preprocessing
@@ -310,16 +320,29 @@ function ImageTracer(){
 					// pixel index
 					idx = (j*imgd.width+i)*4;
 					
-					// find closest color from palette by measuring (rectilinear) color distance between this pixel and all palette colors
-					ci=0; cdl = 1024; // 4 * 256 is the maximum RGBA distance
+					// find closest color from palette by measuring color distance between this pixel and all palette colors
+					ci=0; cdl = Infinity;
 					for( k=0; k<palette.length; k++ ){
-						
-						// In my experience, https://en.wikipedia.org/wiki/Rectilinear_distance works better than https://en.wikipedia.org/wiki/Euclidean_distance
-						cd = 
-							( palette[k].r > imgd.data[idx  ] ? palette[k].r - imgd.data[idx  ] : imgd.data[idx  ] - palette[k].r ) +
-							( palette[k].g > imgd.data[idx+1] ? palette[k].g - imgd.data[idx+1] : imgd.data[idx+1] - palette[k].g ) +
-							( palette[k].b > imgd.data[idx+2] ? palette[k].b - imgd.data[idx+2] : imgd.data[idx+2] - palette[k].b ) +
-							( palette[k].a > imgd.data[idx+3] ? palette[k].a - imgd.data[idx+3] : imgd.data[idx+3] - palette[k].a );
+						if(options.distancemetric === 'euclidean'){
+							var dr = palette[k].r - imgd.data[idx  ],
+							    dg = palette[k].g - imgd.data[idx+1],
+							    db = palette[k].b - imgd.data[idx+2],
+							    da = palette[k].a - imgd.data[idx+3];
+							cd = dr*dr + dg*dg + db*db + da*da;
+						}else if(options.distancemetric === 'perceptual'){
+							var dr = palette[k].r - imgd.data[idx  ],
+							    dg = palette[k].g - imgd.data[idx+1],
+							    db = palette[k].b - imgd.data[idx+2],
+							    da = palette[k].a - imgd.data[idx+3];
+							var rmean = (palette[k].r + imgd.data[idx  ]) >> 1;
+							cd = (((512 + rmean) * dr * dr) >> 8) + 4 * dg * dg + (((767 - rmean) * db * db) >> 8) + 3 * da * da;
+						}else{
+							cd = 
+								( palette[k].r > imgd.data[idx  ] ? palette[k].r - imgd.data[idx  ] : imgd.data[idx  ] - palette[k].r ) +
+								( palette[k].g > imgd.data[idx+1] ? palette[k].g - imgd.data[idx+1] : imgd.data[idx+1] - palette[k].g ) +
+								( palette[k].b > imgd.data[idx+2] ? palette[k].b - imgd.data[idx+2] : imgd.data[idx+2] - palette[k].b ) +
+								( palette[k].a > imgd.data[idx+3] ? palette[k].a - imgd.data[idx+3] : imgd.data[idx+3] - palette[k].a );
+						}
 						
 						// Remember this color if this is the closest yet
 						if(cd<cdl){ cdl = cd; ci = k; }
@@ -344,6 +367,193 @@ function ImageTracer(){
 		return { array:arr, palette:palette };
 		
 	},// End of colorquantization()
+
+	// K-Means clustering algorithm for color selection
+	this.kMeansColorQuantization = function( imgd, options ){
+		options = options || {};
+		var k = Math.max(2, options.numberofcolors || 8);
+		var maxIterations = Math.max(1, options.maxiterations || 10);
+		var initMethod = options.initmethod || 'kmeans_plus';
+		var metric = options.distancemetric || 'perceptual';
+		var sampleTarget = typeof options.samplesize === 'number' ? options.samplesize : (
+			options.samplesize === 'fast' ? 10000 :
+			options.samplesize === 'high' ? 100000 : 30000
+		);
+
+		var data = imgd.data;
+		var totalPixels = imgd.width * imgd.height;
+
+		// 1. Collect valid non-transparent pixels
+		var step = Math.max(1, Math.floor(totalPixels / sampleTarget));
+		var sampleR = [], sampleG = [], sampleB = [];
+		for( var p = 0; p < totalPixels; p += step ){
+			var pIdx = p * 4;
+			if( data[pIdx + 3] >= 32 ){
+				sampleR.push(data[pIdx]);
+				sampleG.push(data[pIdx + 1]);
+				sampleB.push(data[pIdx + 2]);
+			}
+		}
+
+		if( sampleR.length < k && step > 1 ){
+			sampleR = []; sampleG = []; sampleB = [];
+			for( var p = 0; p < totalPixels; p++ ){
+				var pIdx = p * 4;
+				if( data[pIdx + 3] >= 32 ){
+					sampleR.push(data[pIdx]);
+					sampleG.push(data[pIdx + 1]);
+					sampleB.push(data[pIdx + 2]);
+				}
+			}
+		}
+
+		var numSamples = sampleR.length;
+		if( numSamples === 0 ){
+			var fallback = [];
+			for( var f = 0; f < k; f++ ){
+				var val = Math.floor((f / (k - 1 || 1)) * 255);
+				fallback.push({ r: val, g: val, b: val, a: 255 });
+			}
+			return { palette: fallback };
+		}
+
+		var actualK = Math.min(k, numSamples);
+
+		function colorDistanceSq( r1, g1, b1, r2, g2, b2 ){
+			var dr = r1 - r2;
+			var dg = g1 - g2;
+			var db = b1 - b2;
+			if( metric === 'perceptual' ){
+				var rmean = (r1 + r2) >> 1;
+				return (((512 + rmean) * dr * dr) >> 8) + 4 * dg * dg + (((767 - rmean) * db * db) >> 8);
+			} else if( metric === 'manhattan' ){
+				var man = (dr < 0 ? -dr : dr) + (dg < 0 ? -dg : dg) + (db < 0 ? -db : db);
+				return man * man;
+			} else {
+				return dr * dr + dg * dg + db * db;
+			}
+		}
+
+		// 2. Initialize Centroids
+		var centroids = [];
+		if( initMethod === 'kmeans_plus' ){
+			var firstIdx = Math.floor(Math.random() * numSamples);
+			centroids.push({ r: sampleR[firstIdx], g: sampleG[firstIdx], b: sampleB[firstIdx], a: 255 });
+
+			var minDistSq = new Float64Array(numSamples);
+			for( var i = 0; i < numSamples; i++ ){
+				minDistSq[i] = colorDistanceSq(sampleR[i], sampleG[i], sampleB[i], centroids[0].r, centroids[0].g, centroids[0].b);
+			}
+
+			for( var c = 1; c < actualK; c++ ){
+				var sumDistSq = 0;
+				for( var i = 0; i < numSamples; i++ ){
+					sumDistSq += minDistSq[i];
+				}
+
+				if( sumDistSq <= 0 ){
+					var randIdx = Math.floor(Math.random() * numSamples);
+					centroids.push({ r: sampleR[randIdx], g: sampleG[randIdx], b: sampleB[randIdx], a: 255 });
+				} else {
+					var threshold = Math.random() * sumDistSq;
+					var cumSum = 0;
+					var chosenIdx = numSamples - 1;
+					for( var i = 0; i < numSamples; i++ ){
+						cumSum += minDistSq[i];
+						if( cumSum >= threshold ){
+							chosenIdx = i;
+							break;
+						}
+					}
+					centroids.push({ r: sampleR[chosenIdx], g: sampleG[chosenIdx], b: sampleB[chosenIdx], a: 255 });
+
+					for( var i = 0; i < numSamples; i++ ){
+						var d = colorDistanceSq(sampleR[i], sampleG[i], sampleB[i], centroids[c].r, centroids[c].g, centroids[c].b);
+						if( d < minDistSq[i] ){
+							minDistSq[i] = d;
+						}
+					}
+				}
+			}
+		} else if( initMethod === 'grid' ){
+			for( var c = 0; c < actualK; c++ ){
+				var gIdx = Math.floor((c + 0.5) * numSamples / actualK);
+				centroids.push({ r: sampleR[gIdx], g: sampleG[gIdx], b: sampleB[gIdx], a: 255 });
+			}
+		} else {
+			for( var c = 0; c < actualK; c++ ){
+				var rIdx = Math.floor(Math.random() * numSamples);
+				centroids.push({ r: sampleR[rIdx], g: sampleG[rIdx], b: sampleB[rIdx], a: 255 });
+			}
+		}
+
+		// 3. Iterative clustering (Lloyd's Algorithm)
+		var clusterSumR = new Float64Array(actualK);
+		var clusterSumG = new Float64Array(actualK);
+		var clusterSumB = new Float64Array(actualK);
+		var clusterCount = new Int32Array(actualK);
+
+		for( var iter = 0; iter < maxIterations; iter++ ){
+			clusterSumR.fill(0);
+			clusterSumG.fill(0);
+			clusterSumB.fill(0);
+			clusterCount.fill(0);
+
+			for( var i = 0; i < numSamples; i++ ){
+				var sr = sampleR[i], sg = sampleG[i], sb = sampleB[i];
+				var bestDist = Infinity;
+				var bestC = 0;
+				for( var c = 0; c < actualK; c++ ){
+					var d = colorDistanceSq(sr, sg, sb, centroids[c].r, centroids[c].g, centroids[c].b);
+					if( d < bestDist ){
+						bestDist = d;
+						bestC = c;
+					}
+				}
+				clusterSumR[bestC] += sr;
+				clusterSumG[bestC] += sg;
+				clusterSumB[bestC] += sb;
+				clusterCount[bestC]++;
+			}
+
+			var maxShift = 0;
+			for( var c = 0; c < actualK; c++ ){
+				if( clusterCount[c] > 0 ){
+					var newR = Math.round(clusterSumR[c] / clusterCount[c]);
+					var newG = Math.round(clusterSumG[c] / clusterCount[c]);
+					var newB = Math.round(clusterSumB[c] / clusterCount[c]);
+					var shift = Math.abs(centroids[c].r - newR) + Math.abs(centroids[c].g - newG) + Math.abs(centroids[c].b - newB);
+					if( shift > maxShift ) maxShift = shift;
+					centroids[c].r = newR;
+					centroids[c].g = newG;
+					centroids[c].b = newB;
+				} else {
+					var randIdx = Math.floor(Math.random() * numSamples);
+					centroids[c].r = sampleR[randIdx];
+					centroids[c].g = sampleG[randIdx];
+					centroids[c].b = sampleB[randIdx];
+					maxShift = 255;
+				}
+			}
+
+			if( maxShift <= 1 ){
+				break;
+			}
+		}
+
+		while( centroids.length < k ){
+			centroids.push({ r: 255, g: 255, b: 255, a: 255 });
+		}
+
+		// 4. Sort palette by luminance for consistent UI ordering
+		centroids.sort(function(c1, c2){
+			var lum1 = 0.2126 * c1.r + 0.7152 * c1.g + 0.0722 * c1.b;
+			var lum2 = 0.2126 * c2.r + 0.7152 * c2.g + 0.0722 * c2.b;
+			return lum1 - lum2;
+		});
+
+		return { palette: centroids };
+	},// End of kMeansColorQuantization()
 	
 	// Sampling a palette from imagedata
 	this.samplepalette = function( numberofcolors, imgd ){
@@ -497,6 +707,144 @@ function ImageTracer(){
 
 		return isin;
 	},
+
+	// Polylabel Maximum Inscribed Circle algorithm:
+	// Tests whether a circle of radius minRadius can fit completely inside a closed polygon without crossing the outer boundary.
+	this.pointToPolygonDist = function(p, points){
+		var inside = false;
+		var minDistSq = Infinity;
+		var len = points.length;
+
+		for(var i = 0, j = len - 1; i < len; j = i++){
+			var a = points[i];
+			var b = points[j];
+
+			if(((a.y > p.y) !== (b.y > p.y)) &&
+				(p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x)){
+				inside = !inside;
+			}
+
+			var dSq = _this.potraceDistToSegSq(p, a, b);
+			if(dSq < minDistSq){
+				minDistSq = dSq;
+			}
+		}
+
+		return (inside ? 1 : -1) * Math.sqrt(minDistSq);
+	},
+
+	this.canContainCircle = function(points, bbox, minRadius, precision){
+		if(!points || points.length < 3){ return false; }
+		if(!minRadius || minRadius <= 0){ return true; }
+		precision = precision || 0.5;
+
+		var minX = bbox[0], minY = bbox[1], maxX = bbox[2], maxY = bbox[3];
+		var width = maxX - minX;
+		var height = maxY - minY;
+
+		// 1. Instant Bounding Box check:
+		// If bounding box width or height is smaller than the circle diameter, it cannot fit
+		if(width < minRadius * 2 || height < minRadius * 2){
+			return false;
+		}
+
+		// 2. Fast check at bounding box center
+		var cx = (minX + maxX) * 0.5;
+		var cy = (minY + maxY) * 0.5;
+		var centerDist = _this.pointToPolygonDist({ x: cx, y: cy }, points);
+		if(centerDist >= minRadius){
+			return true;
+		}
+
+		// 3. Grid setup for Polylabel
+		var cellSize = Math.min(width, height);
+		var h = cellSize * 0.5;
+		if(cellSize <= 0){ return false; }
+
+		var queue = [];
+		function pushCell(cell){
+			queue.push(cell);
+			var idx = queue.length - 1;
+			while(idx > 0){
+				var p = (idx - 1) >> 1;
+				if(queue[idx].max <= queue[p].max){ break; }
+				var tmp = queue[idx]; queue[idx] = queue[p]; queue[p] = tmp;
+				idx = p;
+			}
+		}
+		function popCell(){
+			var top = queue[0];
+			var bot = queue.pop();
+			if(queue.length > 0){
+				queue[0] = bot;
+				var idx = 0, len = queue.length;
+				while((idx << 1) + 1 < len){
+					var left = (idx << 1) + 1, right = left + 1, best = idx;
+					if(queue[left].max > queue[best].max){ best = left; }
+					if(right < len && queue[right].max > queue[best].max){ best = right; }
+					if(best === idx){ break; }
+					var t = queue[idx]; queue[idx] = queue[best]; queue[best] = t;
+					idx = best;
+				}
+			}
+			return top;
+		}
+
+		var bestDist = centerDist;
+		for(var x = minX; x < maxX; x += cellSize){
+			for(var y = minY; y < maxY; y += cellSize){
+				var cd = _this.pointToPolygonDist({ x: x + h, y: y + h }, points);
+				var cm = cd + h * Math.SQRT2;
+				if(cd > bestDist){ bestDist = cd; }
+				if(bestDist >= minRadius){ return true; }
+				if(cm >= minRadius){
+					pushCell({ x: x + h, y: y + h, h: h, d: cd, max: cm });
+				}
+			}
+		}
+
+		// 4. Polylabel branch & bound loop
+		var maxIterations = 64;
+		var iters = 0;
+		while(queue.length > 0 && iters < maxIterations){
+			iters++;
+			var cell = popCell();
+
+			if(cell.d > bestDist){
+				bestDist = cell.d;
+				if(bestDist >= minRadius){
+					return true;
+				}
+			}
+
+			if(cell.max < minRadius || cell.max - bestDist <= precision){
+				if(cell.max < minRadius && queue.length === 0){
+					break;
+				}
+				continue;
+			}
+
+			var subH = cell.h * 0.5;
+			var offsets = [
+				[-subH, -subH], [subH, -subH],
+				[-subH, subH],  [subH, subH]
+			];
+			for(var k = 0; k < 4; k++){
+				var nx = cell.x + offsets[k][0], ny = cell.y + offsets[k][1];
+				var nd = _this.pointToPolygonDist({ x: nx, y: ny }, points);
+				var nm = nd + subH * Math.SQRT2;
+				if(nd > bestDist){
+					bestDist = nd;
+					if(bestDist >= minRadius){ return true; }
+				}
+				if(nm >= minRadius){
+					pushCell({ x: nx, y: ny, h: subH, d: nd, max: nm });
+				}
+			}
+		}
+
+		return bestDist >= minRadius;
+	},
 	
 	// Lookup tables for pathscan
 	// pathscan_combined_lookup[ arr[py][px] ][ dir ] = [nextarrpypx, nextdir, deltapx, deltapy];
@@ -524,7 +872,7 @@ function ImageTracer(){
 
 	// 3. Walking through an edge node array, discarding edge node types 0 and 15 and creating paths from the rest.
 	// Walk directions (dir): 0 > ; 1 ^ ; 2 < ; 3 v 
-	this.pathscan = function( arr, pathomit ){
+	this.pathscan = function( arr, pathomit, options ){
 		var paths=[], pacnt=0, pcnt=0, px=0, py=0, w = arr[0].length, h = arr.length,
 			dir=0, pathfinished=true, holepath=false, lookuprow;
 		
@@ -566,8 +914,22 @@ function ImageTracer(){
 						if( (px-1 === paths[pacnt].points[0].x ) && ( py-1 === paths[pacnt].points[0].y ) ){
 							pathfinished = true;
 							
-							// Discarding paths shorter than pathomit
-							if( paths[pacnt].points.length < pathomit ){
+							// Discarding speckles using Polylabel circular containment test
+							var speckleRadius = options ? (options.speckleRadius !== undefined ? options.speckleRadius : options.speckleradius) : undefined;
+							var hasSpeckleRadius = (speckleRadius !== undefined && speckleRadius !== null);
+							var sRadius = hasSpeckleRadius ? Number(speckleRadius) : 0;
+
+							var shouldOmit = false;
+							if(paths[pacnt].points.length < 3){
+								shouldOmit = true;
+							}else if(hasSpeckleRadius && sRadius > 0){
+								// Polylabel: Test if a circle of radius sRadius can fit inside without spilling outside
+								shouldOmit = !_this.canContainCircle( paths[pacnt].points, paths[pacnt].boundingbox, sRadius );
+							}else if(pathomit > 0 && paths[pacnt].points.length < pathomit){
+								shouldOmit = true;
+							}
+
+							if(shouldOmit){
 								paths.pop();
 							}else{
 							
@@ -615,11 +977,11 @@ function ImageTracer(){
 	},// End of boundingboxincludes()
 	
 	// 3. Batch pathscan
-	this.batchpathscan = function( layers, pathomit ){
+	this.batchpathscan = function( layers, pathomit, options ){
 		var bpaths = [];
 		for(var k in layers){
 			if(!layers.hasOwnProperty(k)){ continue; }
-			bpaths[k] = _this.pathscan( layers[k], pathomit );
+			bpaths[k] = _this.pathscan( layers[k], pathomit, options );
 		}
 		return bpaths;
 	},
@@ -741,7 +1103,298 @@ function ImageTracer(){
 	// 5.5. If the spline fails (distance error > qtres), find the point with the biggest error, set splitpoint = fitting point
 	// 5.6. Split sequence and recursively apply 5.2. - 5.6. to startpoint-splitpoint and splitpoint-endpoint sequences
 	
-	this.tracepath = function( path, ltres, qtres ){
+	// 5. Potrace curve smoothing helpers and pipeline
+	this.potraceDistToSegSq = function(p, a, b){
+		var dx = b.x - a.x, dy = b.y - a.y;
+		var l2 = dx*dx + dy*dy;
+		if(l2 === 0){
+			var ex = p.x - a.x, ey = p.y - a.y;
+			return ex*ex + ey*ey;
+		}
+		var t = ((p.x - a.x)*dx + (p.y - a.y)*dy) / l2;
+		if(t < 0){ t = 0; } else if(t > 1){ t = 1; }
+		var px = a.x + t*dx, py = a.y + t*dy;
+		var rx = p.x - px, ry = p.y - py;
+		return rx*rx + ry*ry;
+	};
+
+	this.potraceRelaxPolygon = function(points, steps, lambda){
+		if(steps <= 0){ return points; }
+		lambda = (lambda !== undefined && lambda !== null) ? lambda : 0.4;
+		var pts = points;
+		for(var s = 0; s < steps; s++){
+			var len = pts.length;
+			var next = new Array(len);
+			for(var i = 0; i < len; i++){
+				var prev = pts[(i - 1 + len) % len];
+				var curr = pts[i];
+				var nxt = pts[(i + 1) % len];
+				next[i] = {
+					x: curr.x + lambda * (0.5 * (prev.x + nxt.x) - curr.x),
+					y: curr.y + lambda * (0.5 * (prev.y + nxt.y) - curr.y)
+				};
+			}
+			pts = next;
+		}
+		return pts;
+	};
+
+	this.potraceRDP = function(points, startIdx, endIdx, epsilonSq, outIndices){
+		var maxDistSq = 0, index = -1;
+		var a = points[startIdx], b = points[endIdx];
+		for(var i = startIdx + 1; i < endIdx; i++){
+			var dSq = _this.potraceDistToSegSq(points[i], a, b);
+			if(dSq > maxDistSq){
+				maxDistSq = dSq;
+				index = i;
+			}
+		}
+		if(maxDistSq > epsilonSq && index !== -1){
+			_this.potraceRDP(points, startIdx, index, epsilonSq, outIndices);
+			outIndices.push(index);
+			_this.potraceRDP(points, index, endIdx, epsilonSq, outIndices);
+		}
+	};
+
+	this.potraceSimplifyClosed = function(points, epsilon){
+		var n = points.length;
+		if(n <= 3){ return points.slice(); }
+		var epsilonSq = epsilon * epsilon;
+
+		// Find point furthest from point 0 to split closed cycle into 2 arcs
+		var maxD = -1, splitIdx = Math.floor(n / 2), p0 = points[0];
+		for(var i = 1; i < n; i++){
+			var dx = points[i].x - p0.x, dy = points[i].y - p0.y;
+			var d = dx*dx + dy*dy;
+			if(d > maxD){
+				maxD = d;
+				splitIdx = i;
+			}
+		}
+
+		var indices = [0];
+		_this.potraceRDP(points, 0, splitIdx, epsilonSq, indices);
+		indices.push(splitIdx);
+		_this.potraceRDP(points, splitIdx, n - 1, epsilonSq, indices);
+		if(indices[indices.length - 1] !== n - 1){
+			indices.push(n - 1);
+		}
+
+		var simplified = [];
+		for(var k = 0; k < indices.length; k++){
+			simplified.push(points[indices[k]]);
+		}
+		return simplified;
+	};
+
+	this.potraceOptimizeSegments = function(segments){
+		if(!segments || segments.length < 3){ return segments || []; }
+
+		// Simplify flat curves into straight lines
+		var optSegs = [];
+		for(var i = 0; i < segments.length; i++){
+			var s = segments[i];
+			if(s.type === 'Q'){
+				var dSq = _this.potraceDistToSegSq({ x: s.x2, y: s.y2 }, { x: s.x1, y: s.y1 }, { x: s.x3, y: s.y3 });
+				if(dSq < 0.05 * 0.05){
+					optSegs.push({ type: 'L', x1: s.x1, y1: s.y1, x2: s.x3, y2: s.y3 });
+					continue;
+				}
+			}
+			optSegs.push(s);
+		}
+
+		// Merge consecutive collinear line segments
+		var merged = [];
+		for(var j = 0; j < optSegs.length; j++){
+			var seg = optSegs[j];
+			if(merged.length > 0 && merged[merged.length - 1].type === 'L' && seg.type === 'L'){
+				var prev = merged[merged.length - 1];
+				var lineDSq = _this.potraceDistToSegSq({ x: prev.x2, y: prev.y2 }, { x: prev.x1, y: prev.y1 }, { x: seg.x2, y: seg.y2 });
+				if(lineDSq < 0.05 * 0.05){
+					prev.x2 = seg.x2;
+					prev.y2 = seg.y2;
+					continue;
+				}
+			}
+			merged.push({
+				type: seg.type,
+				x1: seg.x1,
+				y1: seg.y1,
+				x2: seg.x2,
+				y2: seg.y2,
+				...(seg.type === 'Q' ? { x3: seg.x3, y3: seg.y3 } : {})
+			});
+		}
+
+		// Collinear wrap-around check between last and first segment
+		if(merged.length > 3 && merged[0].type === 'L' && merged[merged.length - 1].type === 'L'){
+			var first = merged[0], last = merged[merged.length - 1];
+			var wrapDSq = _this.potraceDistToSegSq({ x: last.x2, y: last.y2 }, { x: last.x1, y: last.y1 }, { x: first.x2, y: first.y2 });
+			if(wrapDSq < 0.05 * 0.05){
+				last.x2 = first.x2;
+				last.y2 = first.y2;
+				merged.shift();
+			}
+		}
+
+		// Preserve valid loop with at least 3 segments
+		if(merged.length < 3){
+			return segments;
+		}
+
+		return merged;
+	};
+
+	this.potraceTracePath = function( path, ltres, qtres, options ){
+		options = options || {};
+		var smp = {
+			segments: [],
+			boundingbox: path.boundingbox,
+			holechildren: path.holechildren,
+			isholepath: path.isholepath
+		};
+
+		if(!path || !path.points || path.points.length < 3){
+			return smp;
+		}
+
+		var smoothSteps = (options.smoothSteps !== undefined && options.smoothSteps !== null)
+			? Math.max(0, Math.round(Number(options.smoothSteps)))
+			: ((options.smoothsteps !== undefined && options.smoothsteps !== null) ? Math.max(0, Math.round(Number(options.smoothsteps))) : 2);
+
+		var alphaMax = (options.alphaMax !== undefined && options.alphaMax !== null)
+			? Math.max(0, Number(options.alphaMax))
+			: ((options.alphamax !== undefined && options.alphamax !== null) ? Math.max(0, Number(options.alphamax)) : 1.0);
+
+		var optTolerance = (options.optTolerance !== undefined && options.optTolerance !== null)
+			? Math.max(0.001, Number(options.optTolerance))
+			: ((options.opttolerance !== undefined && options.opttolerance !== null)
+				? Math.max(0.001, Number(options.opttolerance))
+				: (ltres !== undefined ? Math.max(0.001, Number(ltres)) : 1.0));
+
+		// 1. Deduplicate consecutive identical points
+		var rawPoints = path.points;
+		var points = [];
+		for(var i = 0; i < rawPoints.length; i++){
+			var p = rawPoints[i];
+			if(points.length === 0 || Math.hypot(p.x - points[points.length - 1].x, p.y - points[points.length - 1].y) > 1e-4){
+				points.push({ x: p.x, y: p.y });
+			}
+		}
+		if(points.length > 2 && Math.hypot(points[0].x - points[points.length - 1].x, points[0].y - points[points.length - 1].y) < 1e-4){
+			points.pop();
+		}
+		if(points.length < 3){
+			return smp;
+		}
+
+		// 2. Relaxation / smoothing passes
+		if(smoothSteps > 0){
+			points = _this.potraceRelaxPolygon(points, smoothSteps);
+		}
+
+		// 3. Optimal polygon approximation
+		var poly = _this.potraceSimplifyClosed(points, optTolerance);
+		var m = poly.length;
+		if(m < 3){
+			return smp;
+		}
+
+		// 4. Corner detection
+		var isCorner = new Array(m);
+		for(var ci = 0; ci < m; ci++){
+			var prevV = poly[(ci - 1 + m) % m];
+			var currV = poly[ci];
+			var nextV = poly[(ci + 1) % m];
+
+			var dx1 = currV.x - prevV.x;
+			var dy1 = currV.y - prevV.y;
+			var dx2 = nextV.x - currV.x;
+			var dy2 = nextV.y - currV.y;
+
+			var l1 = Math.hypot(dx1, dy1);
+			var l2 = Math.hypot(dx2, dy2);
+
+			if(l1 < 1e-5 || l2 < 1e-5){
+				isCorner[ci] = false;
+				continue;
+			}
+
+			var cosTheta = Math.max(-1, Math.min(1, (dx1*dx2 + dy1*dy2) / (l1 * l2)));
+			var alpha = 1 - cosTheta;
+			isCorner[ci] = alpha >= alphaMax;
+		}
+
+		// 5. Generate smooth Bézier curves and lines
+		var segments = [];
+		var midpoints = new Array(m);
+		for(var mi = 0; mi < m; mi++){
+			var cv = poly[mi];
+			var nv = poly[(mi + 1) % m];
+			midpoints[mi] = {
+				x: (cv.x + nv.x) * 0.5,
+				y: (cv.y + nv.y) * 0.5
+			};
+		}
+
+		for(var vi = 0; vi < m; vi++){
+			var pIdx = (vi - 1 + m) % m;
+			var cIdx = vi;
+			var nIdx = (vi + 1) % m;
+
+			var pMid = midpoints[pIdx];
+			var cMid = midpoints[cIdx];
+			var cVert = poly[cIdx];
+
+			if(!isCorner[cIdx]){
+				segments.push({
+					type: 'Q',
+					x1: pMid.x,
+					y1: pMid.y,
+					x2: cVert.x,
+					y2: cVert.y,
+					x3: cMid.x,
+					y3: cMid.y
+				});
+			}else{
+				if(!isCorner[pIdx]){
+					segments.push({
+						type: 'L',
+						x1: pMid.x,
+						y1: pMid.y,
+						x2: cVert.x,
+						y2: cVert.y
+					});
+				}else{
+					segments.push({
+						type: 'L',
+						x1: poly[pIdx].x,
+						y1: poly[pIdx].y,
+						x2: cVert.x,
+						y2: cVert.y
+					});
+				}
+
+				if(!isCorner[nIdx]){
+					segments.push({
+						type: 'L',
+						x1: cVert.x,
+						y1: cVert.y,
+						x2: cMid.x,
+						y2: cMid.y
+					});
+				}
+			}
+		}
+
+		// 6. Curve optimization
+		smp.segments = _this.potraceOptimizeSegments(segments);
+		return smp;
+	};
+
+	// Original standard path tracing (kept for optional comparison)
+	this.standardTracePath = function( path, ltres, qtres ){
 		var pcnt=0, segtype1, segtype2, seqend, smp = {};
 		smp.segments = [];
 		smp.boundingbox = path.boundingbox;
@@ -749,7 +1402,6 @@ function ImageTracer(){
 		smp.isholepath = path.isholepath;
 		
 		while(pcnt < path.points.length){
-			// 5.1. Find sequences of points with only 2 segment types
 			segtype1 = path.points[pcnt].linesegment; segtype2 = -1; seqend=pcnt+1;
 			while(
 				((path.points[seqend].linesegment === segtype1) || (path.points[seqend].linesegment === segtype2) || (segtype2 === -1))
@@ -757,19 +1409,23 @@ function ImageTracer(){
 				
 				if((path.points[seqend].linesegment!==segtype1) && (segtype2===-1)){ segtype2 = path.points[seqend].linesegment; }
 				seqend++;
-				
 			}
 			if(seqend === path.points.length-1){ seqend = 0; }
 
-			// 5.2. - 5.6. Split sequence and recursively apply 5.2. - 5.6. to startpoint-splitpoint and splitpoint-endpoint sequences
 			smp.segments = smp.segments.concat( _this.fitseq(path, ltres, qtres, pcnt, seqend) );
 			
-			// forward pcnt;
 			if(seqend>0){ pcnt = seqend; }else{ pcnt = path.points.length; }
-			
-		}// End of pcnt loop
+		}
 		
 		return smp;
+	};
+
+	this.tracepath = function( path, ltres, qtres, options ){
+		options = options || {};
+		if(options.curveAlgorithm === 'standard' || options.curvealgorithm === 'standard'){
+			return _this.standardTracePath( path, ltres, qtres );
+		}
+		return _this.potraceTracePath( path, ltres, qtres, options );
 	},// End of tracepath()
 		
 	// 5.2. - 5.6. recursively fitting a straight or quadratic line segment on this sequence of path nodes,
@@ -830,21 +1486,22 @@ function ImageTracer(){
 	},// End of fitseq()
 	
 	// 5. Batch tracing paths
-	this.batchtracepaths = function(internodepaths,ltres,qtres){
+	// 5. Batch tracing paths
+	this.batchtracepaths = function(internodepaths, ltres, qtres, options){
 		var btracedpaths = [];
 		for(var k in internodepaths){
 			if(!internodepaths.hasOwnProperty(k)){ continue; }
-			btracedpaths.push( _this.tracepath(internodepaths[k],ltres,qtres) );
+			btracedpaths.push( _this.tracepath(internodepaths[k], ltres, qtres, options) );
 		}
 		return btracedpaths;
 	},
 	
 	// 5. Batch tracing layers
-	this.batchtracelayers = function(binternodes, ltres, qtres){
+	this.batchtracelayers = function(binternodes, ltres, qtres, options){
 		var btbis = [];
 		for(var k in binternodes){
 			if(!binternodes.hasOwnProperty(k)){ continue; }
-			btbis[k] = _this.batchtracepaths(binternodes[k], ltres, qtres);
+			btbis[k] = _this.batchtracepaths(binternodes[k], ltres, qtres, options);
 		}
 		return btbis;
 	},
