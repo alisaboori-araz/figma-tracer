@@ -62,7 +62,9 @@ type PluginMessage =
   | { type: "UI_READY" }
   | { type: "CHANGE_SOURCE_MODE"; sourceMode: "rendered" | "original" }
   | { type: "TRACE_REQUEST"; options: TraceOptions }
+  | { type: "TRACE_SEQUENCE_REQUEST"; options: TraceOptions; stepCount?: number }
   | { type: "TRACE_RESULT"; trace: TraceResult }
+  | { type: "TRACE_SEQUENCE_RESULT"; trace: TraceResult; stepCount?: number }
   | { type: "TRACE_ERROR"; message: string };
 
 const UI_WIDTH = 720;
@@ -276,6 +278,42 @@ async function traceSelectedImage(options: TraceOptions): Promise<void> {
   }
 }
 
+async function traceSequenceSelectedImage(
+  options: TraceOptions,
+  stepCount?: number
+): Promise<void> {
+  const selection = figma.currentPage.selection;
+
+  if (selection.length !== 1) {
+    reportError("Select exactly one layer to trace, then click Generate sequence.");
+    return;
+  }
+
+  const node = selection[0];
+  sourceNode = node;
+  const normalized = normalizeOptions(options);
+
+  try {
+    postStatus("Reading layer data for sequence…", false, true);
+    const bytes = await getNodeBytes(node, normalized.sourceMode || currentSourceMode);
+    if (bytes.length === 0) {
+      reportError("The selected layer produced no image data.");
+      return;
+    }
+
+    postStatus("Tracing layer sequence in background…", false, true);
+    figma.ui.postMessage({
+      type: "TRACE_SEQUENCE_IMAGE",
+      bytes,
+      options: normalized,
+      stepCount: stepCount && stepCount > 0 ? stepCount : 6,
+    });
+  } catch (error) {
+    console.error("Unable to read layer bytes for sequence:", error);
+    reportError("Unable to capture the selected layer.");
+  }
+}
+
 function isFinitePoint(...values: number[]): boolean {
   return values.every(Number.isFinite);
 }
@@ -466,6 +504,114 @@ async function createNativeTrace(
   }
 }
 
+async function createSequenceTrace(
+  trace: TraceResult,
+  source: SceneNode,
+  requestedStepCount?: number
+): Promise<FrameNode[]> {
+  if (!isFinitePoint(trace.width, trace.height) || trace.width <= 0 || trace.height <= 0) {
+    throw new Error("The tracer returned invalid dimensions.");
+  }
+
+  const totalLayers = trace.layers.length;
+  if (totalLayers === 0) {
+    throw new Error("No usable layers were produced.");
+  }
+
+  const scaleX = source.width / trace.width;
+  const scaleY = source.height / trace.height;
+  const baseX = source.x + source.width + OUTPUT_GAP;
+  const baseY = source.y;
+
+  let S = requestedStepCount && requestedStepCount > 0 ? requestedStepCount : 6;
+  if (S > totalLayers) S = totalLayers;
+  if (S < 2) S = Math.min(2, totalLayers);
+
+  const stepLayerCounts: number[] = [];
+  for (let s = 1; s <= S; s++) {
+    const count = Math.max(1, Math.min(totalLayers, Math.round((s / S) * totalLayers)));
+    if (stepLayerCounts.indexOf(count) === -1) {
+      stepLayerCounts.push(count);
+    }
+  }
+
+  const frames: FrameNode[] = [];
+  let processedVectors = 0;
+
+  try {
+    for (let stepIdx = 0; stepIdx < stepLayerCounts.length; stepIdx++) {
+      const numLayers = stepLayerCounts[stepIdx];
+      const frame = figma.createFrame();
+      frame.name = `Step ${stepIdx + 1} of ${stepLayerCounts.length} (${numLayers} layers)`;
+      frame.resize(source.width, source.height);
+      frame.clipsContent = true;
+      frame.fills = [];
+      frame.x = baseX + stepIdx * (source.width + OUTPUT_GAP);
+      frame.y = baseY;
+      frame.exportSettings = [{ format: "PNG", constraint: { type: "SCALE", value: 1 } }];
+
+      for (let l = 0; l < numLayers; l++) {
+        const layer = trace.layers[l];
+        for (let p = 0; p < layer.paths.length; p++) {
+          const path = layer.paths[p];
+          if (path.isholepath || path.segments.length < 3) continue;
+
+          const allPathSegments = [...path.segments];
+          for (const holeIndex of path.holechildren) {
+            const hole = layer.paths[holeIndex];
+            if (hole) allPathSegments.push(...hole.segments);
+          }
+
+          let minX = Infinity, minY = Infinity;
+          for (let i = 0; i < allPathSegments.length; i++) {
+            const sx = allPathSegments[i].x1 * scaleX;
+            const sy = allPathSegments[i].y1 * scaleY;
+            if (sx < minX) minX = sx;
+            if (sy < minY) minY = sy;
+          }
+
+          const network = { vertices: [] as VectorVertex[], segments: [] as VectorSegment[] };
+          const loops: number[][] = [];
+
+          addPathLoop(path, network, loops, scaleX, scaleY, minX, minY);
+          for (const holeIndex of path.holechildren) {
+            const hole = layer.paths[holeIndex];
+            if (hole) addPathLoop(hole, network, loops, scaleX, scaleY, minX, minY);
+          }
+          if (loops.length === 0) continue;
+
+          const vector = figma.createVector();
+          vector.name = `Shape ${l + 1} (rgb ${layer.color.r},${layer.color.g},${layer.color.b})`;
+          await vector.setVectorNetworkAsync({
+            vertices: network.vertices,
+            segments: network.segments,
+            regions: [{ windingRule: "EVENODD", loops, fills: [makePaint(layer.color)] }],
+          });
+          vector.x = minX;
+          vector.y = minY;
+          frame.appendChild(vector);
+
+          processedVectors++;
+          if (processedVectors % 40 === 0) {
+            await new Promise((resolve) => setTimeout(resolve, 0));
+          }
+        }
+      }
+
+      frames.push(frame);
+    }
+
+    return frames;
+  } catch (error) {
+    for (const frame of frames) {
+      if (!frame.removed) {
+        frame.remove();
+      }
+    }
+    throw error;
+  }
+}
+
 async function handleUiMessage(message: PluginMessage): Promise<void> {
   if (message.type === "UI_READY") {
     uiReady = true;
@@ -484,28 +630,50 @@ async function handleUiMessage(message: PluginMessage): Promise<void> {
     return;
   }
 
+  if (message.type === "TRACE_SEQUENCE_REQUEST") {
+    await traceSequenceSelectedImage(message.options, message.stepCount);
+    return;
+  }
+
   if (message.type === "TRACE_ERROR") {
     reportError(message.message || "Image tracing failed.");
     return;
   }
 
-  if (message.type !== "TRACE_RESULT") {
+  if (message.type === "TRACE_SEQUENCE_RESULT") {
+    try {
+      if (!sourceNode || sourceNode.removed) {
+        throw new Error("The original selection is no longer available.");
+      }
+
+      postStatus("Creating sequence frames on canvas…", false, true);
+      const stepFrames = await createSequenceTrace(message.trace, sourceNode, message.stepCount);
+      figma.currentPage.selection = stepFrames;
+      figma.viewport.scrollAndZoomIntoView([sourceNode, ...stepFrames]);
+      figma.closePlugin(`Created ${stepFrames.length} step-by-step sequence frames.`);
+    } catch (error) {
+      console.error("Unable to create sequence frames:", error);
+      reportError("Unable to add sequence frames to the canvas.");
+    }
     return;
   }
 
-  try {
-    if (!sourceNode || sourceNode.removed) {
-      throw new Error("The original selection is no longer available.");
-    }
+  if (message.type === "TRACE_RESULT") {
+    try {
+      if (!sourceNode || sourceNode.removed) {
+        throw new Error("The original selection is no longer available.");
+      }
 
-    postStatus("Creating Figma vectors…", false, true);
-    const tracedNode = await createNativeTrace(message.trace, sourceNode);
-    figma.currentPage.selection = [tracedNode];
-    figma.viewport.scrollAndZoomIntoView([sourceNode, tracedNode]);
-    figma.closePlugin("Image traced successfully.");
-  } catch (error) {
-    console.error("Unable to create traced vectors:", error);
-    reportError("Unable to add the traced vector paths to the canvas.");
+      postStatus("Creating Figma vectors…", false, true);
+      const tracedNode = await createNativeTrace(message.trace, sourceNode);
+      figma.currentPage.selection = [tracedNode];
+      figma.viewport.scrollAndZoomIntoView([sourceNode, tracedNode]);
+      figma.closePlugin("Image traced successfully.");
+    } catch (error) {
+      console.error("Unable to create traced vectors:", error);
+      reportError("Unable to add the traced vector paths to the canvas.");
+    }
+    return;
   }
 }
 

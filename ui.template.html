@@ -64,14 +64,66 @@
       .canvas-wrap { display: flex; flex: 1; min-height: 0; align-items: center; justify-content: center; overflow: hidden; padding: 12px; background-color: #3a3a3a; background-image: linear-gradient(45deg,#343434 25%,transparent 25%),linear-gradient(-45deg,#343434 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#343434 75%),linear-gradient(-45deg,transparent 75%,#343434 75%); background-size: 18px 18px; background-position: 0 0,0 9px,9px -9px,-9px 0; }
       canvas { max-width: 100%; max-height: 100%; touch-action: none; background: transparent; box-shadow: 0 0 0 1px #171717; }
       .footer { display: flex; align-items: center; justify-content: space-between; min-height: 70px; padding-top: 16px; }
-      #status { max-width: 230px; color: #ccc; line-height: 1.4; }
+      #status { max-width: 170px; color: #ccc; line-height: 1.4; font-size: 11px; }
       #status.error { color: #ff9b9b; }
-      #progress { display: flex; flex: 1; max-width: 250px; align-items: center; gap: 8px; margin-right: 14px; color: #b9c7e8; }
+      #progress { display: flex; flex: 1; max-width: 200px; align-items: center; gap: 8px; margin-right: 14px; color: #b9c7e8; }
       #progress[hidden] { display: none; }
       #progress-track { flex: 1; height: 5px; overflow: hidden; border-radius: 3px; background: #4a4a4a; }
       #progress-bar { width: 0; height: 100%; border-radius: inherit; background: #4c9aff; transition: width .15s ease; }
       #progress-label { min-width: 72px; font-size: 11px; text-align: right; }
-      #trace { height: 32px; padding: 0 14px; border: 0; border-radius: 5px; background: #4c9aff; color: #fff; font: inherit; font-weight: 700; cursor: pointer; }
+      .footer-actions { display: flex; align-items: center; gap: 8px; }
+      .seq-config { display: flex; align-items: center; gap: 4px; font-size: 11px; color: #bbb; }
+      .seq-num { width: 38px !important; height: 26px !important; }
+      .secondary-btn {
+        height: 32px;
+        padding: 0 10px;
+        border: 1px solid #525252;
+        border-radius: 5px;
+        background: #3a3a3a;
+        color: #e2e2e2;
+        font: inherit;
+        font-size: 11px;
+        font-weight: 600;
+        cursor: pointer;
+        white-space: nowrap;
+        transition: background .15s, border-color .15s;
+      }
+      .secondary-btn:hover { background: #464646; border-color: #6e6e6e; color: #fff; }
+      .secondary-btn:disabled { opacity: .55; cursor: default; }
+      .sequence-toolbar {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-top: 8px;
+        padding: 4px 8px;
+        background: #272727;
+        border: 1px solid #3c3c3c;
+        border-radius: 4px;
+      }
+      .icon-btn {
+        width: 24px;
+        height: 22px;
+        padding: 0;
+        border: 1px solid #4a4a4a;
+        border-radius: 3px;
+        background: #363636;
+        color: #ddd;
+        cursor: pointer;
+        font-size: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .icon-btn:hover { background: #454545; color: #fff; }
+      .seq-label {
+        font-size: 11px;
+        color: #aaa;
+        min-width: 75px;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
+      #trace { height: 32px; padding: 0 14px; border: 0; border-radius: 5px; background: #4c9aff; color: #fff; font: inherit; font-weight: 700; cursor: pointer; white-space: nowrap; }
       #trace:disabled { opacity: .55; cursor: default; }
     </style>
   </head>
@@ -273,7 +325,25 @@
       <section class="workspace">
         <div class="notice"><strong>Preview updates as you adjust settings</strong><small>Scroll over preview to zoom</small></div>
         <div class="canvas-wrap"><canvas id="preview" width="380" height="430" aria-label="Trace preview. Scroll to zoom and double-click to reset zoom." title="Scroll to zoom · Double-click to reset"></canvas></div>
-        <div class="footer"><div id="status">Select any layer on canvas to trace.</div><div id="progress" hidden><div id="progress-track"><div id="progress-bar"></div></div><span id="progress-label"></span></div><button id="trace" type="button">Place traced vector</button></div>
+        <div class="sequence-toolbar" id="sequence-toolbar">
+          <button id="seq-prev" type="button" class="icon-btn" title="Previous layer step">◀</button>
+          <button id="seq-play" type="button" class="icon-btn" title="Play progression">▶</button>
+          <button id="seq-next" type="button" class="icon-btn" title="Next layer step">▶</button>
+          <input id="seq-scrubber" type="range" min="1" max="1" value="1" title="Scrub through progressive layer stack" />
+          <span id="seq-step-label" class="seq-label">All layers</span>
+        </div>
+        <div class="footer">
+          <div id="status">Select any layer on canvas to trace.</div>
+          <div id="progress" hidden><div id="progress-track"><div id="progress-bar"></div></div><span id="progress-label"></span></div>
+          <div class="footer-actions">
+            <div class="seq-config">
+              <label for="seq-steps-count" title="Number of sequence frames to generate on canvas">Steps:</label>
+              <input id="seq-steps-count" type="number" class="num-input seq-num" value="6" min="2" max="50" title="Number of step frames to place" />
+            </div>
+            <button id="trace-sequence" type="button" class="secondary-btn" title="Generate progressive step-by-step frames on canvas">Generate sequence</button>
+            <button id="trace" type="button">Place traced vector</button>
+          </div>
+        </div>
       </section>
     </div>
     <script>
@@ -319,9 +389,11 @@
         traceScalePercent: $("trace-scale-percent"),
         traceScalePercentNum: $("trace-scale-percent-num")
       };
-      const previewCanvas = $("preview"), previewContext = previewCanvas.getContext("2d"), traceButton = $("trace"), statusElement = $("status");
+      const previewCanvas = $("preview"), previewContext = previewCanvas.getContext("2d"), traceButton = $("trace"), traceSequenceButton = $("trace-sequence"), statusElement = $("status");
+      const seqScrubber = $("seq-scrubber"), seqPrev = $("seq-prev"), seqPlay = $("seq-play"), seqNext = $("seq-next"), seqStepLabel = $("seq-step-label"), seqStepsCount = $("seq-steps-count");
       const detailPresets = { low: { ltres: 2.5 }, balanced: { ltres: 1.0 }, high: { ltres: 0.5 } };
       let mode = "bw", sourceImage = null, cachedTrace = null, traceTimer = null, palette = null, previewZoom = 1, previewPanX = 0, previewPanY = 0, traceWorker = null, traceRequestId = 0;
+      let previewLayerStep = null, seqPlayInterval = null;
 
       function activeTraceControls() {
         if (mode === "color") {
@@ -665,8 +737,35 @@
         previewContext.closePath();
       }
 
+      function updateSequenceUI() {
+        if (!cachedTrace || !cachedTrace.layers) {
+          seqScrubber.min = 1;
+          seqScrubber.max = 1;
+          seqScrubber.value = 1;
+          seqStepLabel.textContent = "All layers";
+          return;
+        }
+        const total = cachedTrace.layers.length;
+        seqScrubber.min = 1;
+        seqScrubber.max = total;
+        if (previewLayerStep === null || previewLayerStep > total) {
+          previewLayerStep = total;
+          seqScrubber.value = total;
+          seqStepLabel.textContent = `All (${total}/${total})`;
+        } else {
+          seqScrubber.value = previewLayerStep;
+          seqStepLabel.textContent = previewLayerStep === total ? `All (${total}/${total})` : `Step: ${previewLayerStep}/${total}`;
+        }
+      }
+
       function drawTrace(tracedata, prepared, fit, fillPaths) {
-        tracedata.layers.forEach((paths, layerIndex) => {
+        const total = tracedata.layers.length;
+        const limit = (previewLayerStep !== null && previewLayerStep > 0 && previewLayerStep <= total)
+          ? previewLayerStep
+          : total;
+
+        for (let layerIndex = 0; layerIndex < limit; layerIndex++) {
+          const paths = tracedata.layers[layerIndex];
           const color = tracedata.palette[layerIndex];
           const fill = `rgba(${color.r},${color.g},${color.b},${color.a / 255})`;
           paths.forEach(path => {
@@ -692,7 +791,7 @@
               });
             }
           });
-        });
+        }
       }
 
       function renderPreview() {
@@ -712,7 +811,10 @@
             drawImagePreview(prepared, fit);
             previewContext.globalAlpha = 1;
           }
-          if (!cachedTrace) cachedTrace = tracePrepared(prepared, settings);
+          if (!cachedTrace) {
+            cachedTrace = tracePrepared(prepared, settings);
+            updateSequenceUI();
+          }
           drawTrace(cachedTrace, prepared, fit, !original);
         } catch (error) {
           setStatus(error.message || "Unable to render preview.", true);
@@ -782,7 +884,13 @@ self.onmessage = function(event) {
         })
       };
     });
-    self.postMessage({ type: "result", requestId: job.requestId, trace: { width: job.width, height: job.height, layers: layers } });
+    self.postMessage({
+      type: "result",
+      requestId: job.requestId,
+      trace: { width: job.width, height: job.height, layers: layers },
+      isSequence: !!job.isSequence,
+      stepCount: job.stepCount
+    });
   } catch (error) {
     self.postMessage({ type: "error", requestId: event.data.requestId, message: error.message || "Image tracing failed." });
   }
@@ -798,8 +906,13 @@ self.onmessage = function(event) {
           }
           setProgress(null);
           traceButton.disabled = false;
+          traceSequenceButton.disabled = false;
           if (message.type === "result") {
-            parent.postMessage({ pluginMessage: { type: "TRACE_RESULT", trace: message.trace } }, "*");
+            if (message.isSequence) {
+              parent.postMessage({ pluginMessage: { type: "TRACE_SEQUENCE_RESULT", trace: message.trace, stepCount: message.stepCount } }, "*");
+            } else {
+              parent.postMessage({ pluginMessage: { type: "TRACE_RESULT", trace: message.trace } }, "*");
+            }
           } else {
             parent.postMessage({ pluginMessage: { type: "TRACE_ERROR", message: message.message } }, "*");
           }
@@ -807,6 +920,7 @@ self.onmessage = function(event) {
         traceWorker.onerror = function() {
           setProgress(null);
           traceButton.disabled = false;
+          traceSequenceButton.disabled = false;
           parent.postMessage({ pluginMessage: { type: "TRACE_ERROR", message: "The background tracing worker stopped unexpectedly." } }, "*");
         };
         return traceWorker;
@@ -821,13 +935,42 @@ self.onmessage = function(event) {
           const requestId = ++traceRequestId;
           setProgress(40, "Tracing image in background…");
           worker.postMessage(
-            { requestId, buffer: prepared.data.data.buffer, width: prepared.width, height: prepared.height, settings: message.options },
+            { requestId, buffer: prepared.data.data.buffer, width: prepared.width, height: prepared.height, settings: message.options, isSequence: false },
             [prepared.data.data.buffer]
           );
         } catch (error) {
           setProgress(null);
           traceButton.disabled = false;
+          traceSequenceButton.disabled = false;
           parent.postMessage({ pluginMessage: { type: "TRACE_ERROR", message: error.message || "Image tracing failed." } }, "*");
+        }
+      }
+
+      async function traceSequenceImage(message) {
+        try {
+          setProgress(25, "Preparing image for sequence…");
+          const image = await loadImage(message.bytes instanceof Uint8Array ? message.bytes : new Uint8Array(message.bytes));
+          const prepared = preprocess(image, message.options, message.options.traceScalePercent);
+          const worker = getTraceWorker();
+          const requestId = ++traceRequestId;
+          setProgress(40, "Tracing progressive sequence…");
+          worker.postMessage(
+            {
+              requestId,
+              buffer: prepared.data.data.buffer,
+              width: prepared.width,
+              height: prepared.height,
+              settings: message.options,
+              isSequence: true,
+              stepCount: message.stepCount || 6
+            },
+            [prepared.data.data.buffer]
+          );
+        } catch (error) {
+          setProgress(null);
+          traceButton.disabled = false;
+          traceSequenceButton.disabled = false;
+          parent.postMessage({ pluginMessage: { type: "TRACE_ERROR", message: error.message || "Sequence tracing failed." } }, "*");
         }
       }
 
@@ -928,9 +1071,79 @@ self.onmessage = function(event) {
 
       traceButton.addEventListener("click", () => {
         traceButton.disabled = true;
+        traceSequenceButton.disabled = true;
         setProgress(10, "Reading image…");
         setStatus("Tracing image in background…");
         parent.postMessage({ pluginMessage: { type: "TRACE_REQUEST", options: options() } }, "*");
+      });
+
+      traceSequenceButton.addEventListener("click", () => {
+        traceButton.disabled = true;
+        traceSequenceButton.disabled = true;
+        setProgress(10, "Reading image…");
+        setStatus("Generating step sequence…");
+        const stepCount = parseInt(seqStepsCount.value, 10) || 6;
+        parent.postMessage({ pluginMessage: { type: "TRACE_SEQUENCE_REQUEST", options: options(), stepCount } }, "*");
+      });
+
+      seqScrubber.addEventListener("input", () => {
+        if (seqPlayInterval) stopSequencePlay();
+        previewLayerStep = parseInt(seqScrubber.value, 10);
+        const total = cachedTrace ? cachedTrace.layers.length : previewLayerStep;
+        seqStepLabel.textContent = previewLayerStep === total ? `All (${total}/${total})` : `Step: ${previewLayerStep}/${total}`;
+        renderPreview();
+      });
+
+      seqPrev.addEventListener("click", () => {
+        if (seqPlayInterval) stopSequencePlay();
+        if (!cachedTrace) return;
+        const total = cachedTrace.layers.length;
+        let cur = previewLayerStep !== null ? previewLayerStep : total;
+        cur = Math.max(1, cur - 1);
+        previewLayerStep = cur;
+        seqScrubber.value = cur;
+        seqStepLabel.textContent = `Step: ${cur}/${total}`;
+        renderPreview();
+      });
+
+      seqNext.addEventListener("click", () => {
+        if (seqPlayInterval) stopSequencePlay();
+        if (!cachedTrace) return;
+        const total = cachedTrace.layers.length;
+        let cur = previewLayerStep !== null ? previewLayerStep : 1;
+        cur = Math.min(total, cur + 1);
+        previewLayerStep = cur;
+        seqScrubber.value = cur;
+        seqStepLabel.textContent = cur === total ? `All (${total}/${total})` : `Step: ${cur}/${total}`;
+        renderPreview();
+      });
+
+      function stopSequencePlay() {
+        if (seqPlayInterval) {
+          clearInterval(seqPlayInterval);
+          seqPlayInterval = null;
+          seqPlay.textContent = "▶";
+          seqPlay.title = "Play progression";
+        }
+      }
+
+      seqPlay.addEventListener("click", () => {
+        if (seqPlayInterval) {
+          stopSequencePlay();
+          return;
+        }
+        if (!cachedTrace || !cachedTrace.layers.length) return;
+        const total = cachedTrace.layers.length;
+        seqPlay.textContent = "⏸";
+        seqPlay.title = "Pause progression";
+        let cur = (previewLayerStep !== null && previewLayerStep < total) ? previewLayerStep : 0;
+        seqPlayInterval = setInterval(() => {
+          cur = (cur >= total) ? 1 : cur + 1;
+          previewLayerStep = cur;
+          seqScrubber.value = cur;
+          seqStepLabel.textContent = cur === total ? `All (${total}/${total})` : `Step: ${cur}/${total}`;
+          renderPreview();
+        }, 220);
       });
 
       window.onmessage = async event => {
@@ -951,6 +1164,8 @@ self.onmessage = function(event) {
             sourceImage = await loadImage(message.bytes instanceof Uint8Array ? message.bytes : new Uint8Array(message.bytes));
             previewZoom = 1; previewPanX = 0; previewPanY = 0;
             palette = null;
+            previewLayerStep = null;
+            stopSequencePlay();
             extractPalette();
             labels();
             schedulePreview();
@@ -963,9 +1178,12 @@ self.onmessage = function(event) {
           drawBackground();
         } else if (message.type === "TRACE_IMAGE") {
           traceImage(message);
+        } else if (message.type === "TRACE_SEQUENCE_IMAGE") {
+          traceSequenceImage(message);
         } else if (message.type === "STATUS") {
           setStatus(message.message, message.isError);
           traceButton.disabled = !!message.busy;
+          traceSequenceButton.disabled = !!message.busy;
         }
       };
 
