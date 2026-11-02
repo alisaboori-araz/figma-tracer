@@ -658,7 +658,7 @@
           layeringMode: controls.layeringMode ? controls.layeringMode.value : "hierarchical",
           edgeStyle: controls.edgeStyle ? controls.edgeStyle.value : "organic",
           useEdges: controls.useEdges ? controls.useEdges.checked : false,
-          edgeEngine: controls.edgeEngine ? controls.edgeEngine.value : "classical",
+          edgeEngine: (controls.edgeEngine && aiEngineAvailable) ? controls.edgeEngine.value : "classical",
           edgeSensitivity: controls.edgeSensitivityNum ? parseFloat(controls.edgeSensitivityNum.value) || 35 : 35,
           aiEdgeThreshold: controls.aiThresholdNum ? Math.max(0.01, Math.min(0.99, parseFloat(controls.aiThresholdNum.value) || 0.20)) : 0.20,
           edgeBlur: controls.edgeBlurNum ? Math.max(0, parseFloat(controls.edgeBlurNum.value) || 0) : 0,
@@ -889,7 +889,7 @@
       function tracePrepared(prepared, settings) {
         const layeringVal = settings.layeringMode === "hierarchical" ? 2 : (settings.layeringMode === "cutout" ? 1 : 0);
         let aiEdges = undefined;
-        if (settings.useEdges && settings.edgeEngine === "ai" && cachedAiRawEdge && cachedAiRawW === prepared.width && cachedAiRawH === prepared.height) {
+        if (settings.useEdges && settings.edgeEngine === "ai" && aiEngineAvailable && cachedAiRawEdge && cachedAiRawW === prepared.width && cachedAiRawH === prepared.height) {
           const thresh = settings.aiEdgeThreshold !== undefined ? settings.aiEdgeThreshold : 0.20;
           const total = prepared.width * prepared.height;
           aiEdges = new Uint8Array(total);
@@ -1059,37 +1059,69 @@
       let ortSession = null;
       let cachedAiRawEdge = null;
       let cachedAiRawW = 0, cachedAiRawH = 0;
+      let aiEngineAvailable = true;
+
+      function checkWebGLSupport() {
+        try {
+          const testCanvas = document.createElement("canvas");
+          const gl = testCanvas.getContext("webgl2") || testCanvas.getContext("webgl") || testCanvas.getContext("experimental-webgl");
+          return !!gl;
+        } catch (_) {
+          return false;
+        }
+      }
+
+      function markAiUnavailable(reason) {
+        aiEngineAvailable = false;
+        ortSession = null;
+        if (controls.edgeEngine) {
+          controls.edgeEngine.value = "classical";
+          const aiOpt = controls.edgeEngine.querySelector('option[value="ai"]');
+          if (aiOpt) {
+            aiOpt.textContent = "AI Neural (TEED - WebGL unavailable)";
+            aiOpt.disabled = true;
+          }
+        }
+        if ($("classical-edge-controls")) $("classical-edge-controls").hidden = false;
+        if ($("ai-edge-controls")) $("ai-edge-controls").hidden = true;
+        if ($("ai-status")) {
+          $("ai-status").textContent = "⚠️ WebGL acceleration unavailable in this Figma environment. Switched to Classical engine.";
+          $("ai-status").style.color = "#ff9500";
+        }
+        console.warn("AI edge detection unavailable:", reason);
+      }
 
       async function getTeedSession() {
         if (ortSession) return ortSession;
-        if (typeof ort === "undefined") {
-          throw new Error("ONNX Runtime Web is not loaded in UI.");
+        if (!aiEngineAvailable) return null;
+        if (typeof ort === "undefined" || typeof TEED_MODEL_BASE64 === "undefined") {
+          markAiUnavailable("ONNX Runtime or TEED model asset not loaded.");
+          return null;
         }
-        if (typeof TEED_MODEL_BASE64 === "undefined") {
-          throw new Error("TEED model is not embedded in UI.");
-        }
-        try {
-          if (ort.env && ort.env.wasm) ort.env.wasm.numThreads = 1;
-        } catch (_) {}
-
-        const binaryStr = atob(TEED_MODEL_BASE64);
-        const len = binaryStr.length;
-        const bytes = new Uint8Array(len);
-        for (let i = 0; i < len; i++) {
-          bytes[i] = binaryStr.charCodeAt(i);
+        if (!checkWebGLSupport()) {
+          markAiUnavailable("WebGL context could not be created.");
+          return null;
         }
 
         try {
-          ortSession = await ort.InferenceSession.create(bytes.buffer, {
-            executionProviders: ["webgl", "wasm", "cpu"]
+          const binaryStr = atob(TEED_MODEL_BASE64);
+          const len = binaryStr.length;
+          const bytes = new Uint8Array(len);
+          for (let i = 0; i < len; i++) {
+            bytes[i] = binaryStr.charCodeAt(i);
+          }
+          ortSession = await ort.InferenceSession.create(bytes, {
+            executionProviders: ["webgl"]
           });
-          if ($("ai-status")) $("ai-status").textContent = "⚡ TEED 58K Neural Edge Detector active (WebGL).";
+          if ($("ai-status")) {
+            $("ai-status").textContent = "⚡ TEED 58K Neural Edge Detector active (WebGL).";
+            $("ai-status").style.color = "#00e676";
+          }
+          return ortSession;
         } catch (e) {
-          console.warn("WebGL EP not available, falling back to default:", e);
-          ortSession = await ort.InferenceSession.create(bytes.buffer);
-          if ($("ai-status")) $("ai-status").textContent = "⚡ TEED 58K Neural Edge Detector active (WASM/CPU).";
+          markAiUnavailable(e.message || "WebGL initialization failed.");
+          return null;
         }
-        return ortSession;
       }
 
       async function runAiEdgeInference(preparedData, width, height) {
@@ -1097,58 +1129,65 @@
           return cachedAiRawEdge;
         }
         const session = await getTeedSession();
-        const padW = Math.ceil(width / 16) * 16;
-        const padH = Math.ceil(height / 16) * 16;
-        const totalPad = padW * padH;
-        const inputData = new Float32Array(3 * totalPad);
-        const d = preparedData;
-        const meanB = 103.939, meanG = 116.779, meanR = 123.68;
-        const planeSize = totalPad;
+        if (!session) return null;
+        try {
+          const padW = Math.ceil(width / 16) * 16;
+          const padH = Math.ceil(height / 16) * 16;
+          const totalPad = padW * padH;
+          const inputData = new Float32Array(3 * totalPad);
+          const d = preparedData;
+          const meanB = 103.939, meanG = 116.779, meanR = 123.68;
+          const planeSize = totalPad;
 
-        for (let y = 0; y < height; y++) {
-          const rowSrc = y * width;
-          const rowDst = y * padW;
-          for (let x = 0; x < width; x++) {
-            const srcIdx = (rowSrc + x) * 4;
-            const dstIdx = rowDst + x;
-            inputData[dstIdx] = d[srcIdx + 2] - meanB;                 // B
-            inputData[planeSize + dstIdx] = d[srcIdx + 1] - meanG;      // G
-            inputData[2 * planeSize + dstIdx] = d[srcIdx] - meanR;      // R
+          for (let y = 0; y < height; y++) {
+            const rowSrc = y * width;
+            const rowDst = y * padW;
+            for (let x = 0; x < width; x++) {
+              const srcIdx = (rowSrc + x) * 4;
+              const dstIdx = rowDst + x;
+              inputData[dstIdx] = d[srcIdx + 2] - meanB;                 // B
+              inputData[planeSize + dstIdx] = d[srcIdx + 1] - meanG;      // G
+              inputData[2 * planeSize + dstIdx] = d[srcIdx] - meanR;      // R
+            }
           }
-        }
 
-        const tensor = new ort.Tensor("float32", inputData, [1, 3, padH, padW]);
-        const feeds = {};
-        feeds[session.inputNames[0]] = tensor;
+          const tensor = new ort.Tensor("float32", inputData, [1, 3, padH, padW]);
+          const feeds = {};
+          feeds[session.inputNames[0]] = tensor;
 
-        const results = await session.run(feeds);
-        const outTensor = results[session.outputNames[0]];
-        const raw = outTensor.data;
+          const results = await session.run(feeds);
+          const outTensor = results[session.outputNames[0]];
+          const raw = outTensor.data;
 
-        let minVal = Infinity, maxVal = -Infinity;
-        for (let y = 0; y < height; y++) {
-          const row = y * padW;
-          for (let x = 0; x < width; x++) {
-            const v = raw[row + x];
-            if (v < minVal) minVal = v;
-            if (v > maxVal) maxVal = v;
+          let minVal = Infinity, maxVal = -Infinity;
+          for (let y = 0; y < height; y++) {
+            const row = y * padW;
+            for (let x = 0; x < width; x++) {
+              const v = raw[row + x];
+              if (v < minVal) minVal = v;
+              if (v > maxVal) maxVal = v;
+            }
           }
-        }
 
-        const range = (maxVal - minVal) > 1e-5 ? (maxVal - minVal) : 1;
-        const normEdge = new Float32Array(width * height);
-        for (let y = 0; y < height; y++) {
-          const rowSrc = y * padW;
-          const rowDst = y * width;
-          for (let x = 0; x < width; x++) {
-            normEdge[rowDst + x] = (raw[rowSrc + x] - minVal) / range;
+          const range = (maxVal - minVal) > 1e-5 ? (maxVal - minVal) : 1;
+          const normEdge = new Float32Array(width * height);
+          for (let y = 0; y < height; y++) {
+            const rowSrc = y * padW;
+            const rowDst = y * width;
+            for (let x = 0; x < width; x++) {
+              normEdge[rowDst + x] = (raw[rowSrc + x] - minVal) / range;
+            }
           }
-        }
 
-        cachedAiRawEdge = normEdge;
-        cachedAiRawW = width;
-        cachedAiRawH = height;
-        return normEdge;
+          cachedAiRawEdge = normEdge;
+          cachedAiRawW = width;
+          cachedAiRawH = height;
+          return normEdge;
+        } catch (inferErr) {
+          console.warn("AI inference failed during execution, falling back to Classical:", inferErr);
+          markAiUnavailable(inferErr.message || "Inference execution failed.");
+          return null;
+        }
       }
 
       async function renderEdgePreview() {
@@ -1162,18 +1201,27 @@
           const total = w * h;
           let edgeMap = null;
 
-          if (settings.useEdges && settings.edgeEngine === "ai") {
+          if (settings.useEdges && settings.edgeEngine === "ai" && aiEngineAvailable) {
             if ($("edge-stats")) $("edge-stats").textContent = "AI neural inferring...";
             const rawProb = await runAiEdgeInference(prepared.data.data, w, h);
-            const thresh = settings.aiEdgeThreshold !== undefined ? settings.aiEdgeThreshold : 0.20;
-            const aiEdges = new Uint8Array(total);
-            for (let i = 0; i < total; i++) {
-              if (rawProb[i] > thresh) aiEdges[i] = 1;
+            if (rawProb) {
+              const thresh = settings.aiEdgeThreshold !== undefined ? settings.aiEdgeThreshold : 0.20;
+              const aiEdges = new Uint8Array(total);
+              for (let i = 0; i < total; i++) {
+                if (rawProb[i] > thresh) aiEdges[i] = 1;
+              }
+              edgeMap = ImageTracer.detectEdgeMap(prepared.data, null, {
+                aiedges: aiEdges,
+                edgegapclose: settings.edgeGapClose
+              });
+            } else {
+              edgeMap = ImageTracer.detectEdgeMap(prepared.data, null, {
+                edgesensitivity: settings.edgeSensitivity,
+                edgeblur: settings.edgeBlur,
+                edgegapclose: settings.edgeGapClose,
+                edgethinning: settings.edgeThinning
+              });
             }
-            edgeMap = ImageTracer.detectEdgeMap(prepared.data, null, {
-              aiedges: aiEdges,
-              edgegapclose: settings.edgeGapClose
-            });
           } else {
             edgeMap = ImageTracer.detectEdgeMap(prepared.data, null, {
               edgesensitivity: settings.edgeSensitivity,
@@ -1189,7 +1237,7 @@
           }
           const edgePct = total > 0 ? ((edgeCount / total) * 100).toFixed(1) : "0.0";
           if ($("edge-stats")) {
-            const engineTag = settings.edgeEngine === "ai" ? " (AI)" : "";
+            const engineTag = (settings.edgeEngine === "ai" && aiEngineAvailable) ? " (AI)" : "";
             $("edge-stats").textContent = `${edgeCount.toLocaleString()} edge px (${edgePct}%)${engineTag}`;
           }
 
@@ -1266,7 +1314,7 @@
             drawImagePreview(prepared, fit);
             previewContext.globalAlpha = 1;
           }
-          if (settings.useEdges && settings.edgeEngine === "ai" && (!cachedAiRawEdge || cachedAiRawW !== prepared.width || cachedAiRawH !== prepared.height)) {
+          if (settings.useEdges && settings.edgeEngine === "ai" && aiEngineAvailable && (!cachedAiRawEdge || cachedAiRawW !== prepared.width || cachedAiRawH !== prepared.height)) {
             setStatus("Running AI edge detector…");
             await runAiEdgeInference(prepared.data.data, prepared.width, prepared.height);
             setStatus("Ready to trace");
@@ -1402,16 +1450,18 @@ self.onmessage = function(event) {
           const prepared = preprocess(image, message.options, message.options.traceScalePercent);
 
           let aiEdgeBuffer = undefined;
-          if (message.options.useEdges && message.options.edgeEngine === "ai") {
+          if (message.options.useEdges && message.options.edgeEngine === "ai" && aiEngineAvailable) {
             setProgress(30, "Running AI edge detector…");
             const rawProb = await runAiEdgeInference(prepared.data.data, prepared.width, prepared.height);
-            const thresh = message.options.aiEdgeThreshold !== undefined ? message.options.aiEdgeThreshold : 0.20;
-            const total = prepared.width * prepared.height;
-            const aiEdges = new Uint8Array(total);
-            for (let i = 0; i < total; i++) {
-              if (rawProb[i] > thresh) aiEdges[i] = 1;
+            if (rawProb) {
+              const thresh = message.options.aiEdgeThreshold !== undefined ? message.options.aiEdgeThreshold : 0.20;
+              const total = prepared.width * prepared.height;
+              const aiEdges = new Uint8Array(total);
+              for (let i = 0; i < total; i++) {
+                if (rawProb[i] > thresh) aiEdges[i] = 1;
+              }
+              aiEdgeBuffer = aiEdges.buffer;
             }
-            aiEdgeBuffer = aiEdges.buffer;
           }
 
           const worker = getTraceWorker();
@@ -1447,16 +1497,18 @@ self.onmessage = function(event) {
           const prepared = preprocess(image, message.options, message.options.traceScalePercent);
 
           let aiEdgeBuffer = undefined;
-          if (message.options.useEdges && message.options.edgeEngine === "ai") {
+          if (message.options.useEdges && message.options.edgeEngine === "ai" && aiEngineAvailable) {
             setProgress(30, "Running AI edge detector…");
             const rawProb = await runAiEdgeInference(prepared.data.data, prepared.width, prepared.height);
-            const thresh = message.options.aiEdgeThreshold !== undefined ? message.options.aiEdgeThreshold : 0.20;
-            const total = prepared.width * prepared.height;
-            const aiEdges = new Uint8Array(total);
-            for (let i = 0; i < total; i++) {
-              if (rawProb[i] > thresh) aiEdges[i] = 1;
+            if (rawProb) {
+              const thresh = message.options.aiEdgeThreshold !== undefined ? message.options.aiEdgeThreshold : 0.20;
+              const total = prepared.width * prepared.height;
+              const aiEdges = new Uint8Array(total);
+              for (let i = 0; i < total; i++) {
+                if (rawProb[i] > thresh) aiEdges[i] = 1;
+              }
+              aiEdgeBuffer = aiEdges.buffer;
             }
-            aiEdgeBuffer = aiEdges.buffer;
           }
 
           const worker = getTraceWorker();
@@ -1571,7 +1623,14 @@ self.onmessage = function(event) {
         schedulePreview();
       });
       if (controls.edgeEngine) {
-        controls.edgeEngine.addEventListener("change", () => {
+        controls.edgeEngine.addEventListener("change", async () => {
+          if (controls.edgeEngine.value === "ai") {
+            const session = await getTeedSession();
+            if (!session) {
+              controls.edgeEngine.value = "classical";
+              return;
+            }
+          }
           const isAi = controls.edgeEngine.value === "ai";
           if ($("classical-edge-controls")) $("classical-edge-controls").hidden = isAi;
           if ($("ai-edge-controls")) $("ai-edge-controls").hidden = !isAi;

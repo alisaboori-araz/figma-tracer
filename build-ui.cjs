@@ -22,8 +22,14 @@ if (!fs.existsSync(teedModelPath)) {
 
 const template = fs.readFileSync(templatePath, "utf8");
 const imageTracerSource = fs.readFileSync(imageTracerPath, "utf8");
-const ortSource = fs.readFileSync(ortPath, "utf8");
+const rawOrtSource = fs.readFileSync(ortPath, "utf8");
 const teedModelBase64 = fs.readFileSync(teedModelPath).toString("base64");
+
+// Patch ONNX Runtime Web WebGL canvas factory so it falls back from OffscreenCanvas to DOM canvas if OffscreenCanvas returns null context
+const ortSource = rawOrtSource.replace(
+  "t=Fd(e,i)}catch{",
+  "t=Fd(e,i);if(!t)throw new Error()}catch{"
+);
 
 if (!template.includes(placeholder)) {
   throw new Error("ui.template.html is missing the ImageTracer placeholder.");
@@ -32,6 +38,19 @@ if (!template.includes(placeholder)) {
 const safeWorkerSource = JSON.stringify(imageTracerSource).replace(/</g, "\\u003c");
 
 const embeddedLibrary = [
+  "<script>",
+  "// Ensure ONNX Runtime Web does not crash if OffscreenCanvas lacks WebGL in sandboxed iframes",
+  "if (typeof OffscreenCanvas !== 'undefined') {",
+  "  try {",
+  "    var _testOc = new OffscreenCanvas(1, 1);",
+  "    if (!_testOc.getContext('webgl2') && !_testOc.getContext('webgl') && !_testOc.getContext('experimental-webgl')) {",
+  "      OffscreenCanvas = undefined;",
+  "    }",
+  "  } catch (_) {",
+  "    OffscreenCanvas = undefined;",
+  "  }",
+  "}",
+  "</script>",
   "<script>",
   ortSource,
   "</script>",
