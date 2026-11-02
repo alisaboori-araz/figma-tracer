@@ -1751,75 +1751,96 @@ function ImageTracer(){
 		var edgeBlur = options.edgeblur !== undefined ? Number(options.edgeblur) : 0;
 		var gapClose = options.edgegapclose !== undefined ? Number(options.edgegapclose) : 1;
 		var useThinning = options.edgethinning !== undefined ? Boolean(options.edgethinning) : true;
+		var edges = null;
 
-		// 1. Convert to grayscale luminance
-		var gray = new Uint8Array(total);
-		for(var i = 0; i < total; i++){
-			var idx = i * 4;
-			gray[i] = (d[idx] * 0.299 + d[idx+1] * 0.587 + d[idx+2] * 0.114) | 0;
-		}
+		// 0. Use precomputed AI neural edge map if provided (e.g. from TEED model)
+		if(options.useedges === false){
+			edges = new Uint8Array(total);
+		}else if(options.aiedges && options.aiedges.length === total){
+			edges = new Uint8Array(options.aiedges);
+		}else{
+			// 1. Convert to grayscale luminance
+			var gray = new Uint8Array(total);
+			for(var i = 0; i < total; i++){
+				var idx = i * 4;
+				gray[i] = (d[idx] * 0.299 + d[idx+1] * 0.587 + d[idx+2] * 0.114) | 0;
+			}
 
-		// 2. Pre-blur if specified
-		if(edgeBlur > 0){
-			gray = _this.boxBlurGrayscale(gray, w, h, edgeBlur);
-		}
+			// 2. Pre-blur if specified
+			if(edgeBlur > 0){
+				gray = _this.boxBlurGrayscale(gray, w, h, edgeBlur);
+			}
 
-		// 3. Sobel gradient magnitude & angle
-		var mag = new Float32Array(total);
-		var dir = new Uint8Array(total);
+			// 3. Sobel gradient magnitude & angle
+			var mag = new Float32Array(total);
+			var dir = new Uint8Array(total);
 
-		for(var y = 1; y < h - 1; y++){
-			var rPrev = (y - 1) * w;
-			var rCurr = y * w;
-			var rNext = (y + 1) * w;
-			for(var x = 1; x < w - 1; x++){
-				var gx = (gray[rPrev + x + 1] + 2*gray[rCurr + x + 1] + gray[rNext + x + 1]) -
-				         (gray[rPrev + x - 1] + 2*gray[rCurr + x - 1] + gray[rNext + x - 1]);
-				var gy = (gray[rNext + x - 1] + 2*gray[rNext + x] + gray[rNext + x + 1]) -
-				         (gray[rPrev + x - 1] + 2*gray[rPrev + x] + gray[rPrev + x + 1]);
-				var p = rCurr + x;
-				var m = Math.sqrt(gx * gx + gy * gy);
-				mag[p] = m;
+			for(var y = 1; y < h - 1; y++){
+				var rPrev = (y - 1) * w;
+				var rCurr = y * w;
+				var rNext = (y + 1) * w;
+				for(var x = 1; x < w - 1; x++){
+					var gx = (gray[rPrev + x + 1] + 2*gray[rCurr + x + 1] + gray[rNext + x + 1]) -
+					         (gray[rPrev + x - 1] + 2*gray[rCurr + x - 1] + gray[rNext + x - 1]);
+					var gy = (gray[rNext + x - 1] + 2*gray[rNext + x] + gray[rNext + x + 1]) -
+					         (gray[rPrev + x - 1] + 2*gray[rPrev + x] + gray[rPrev + x + 1]);
+					var p = rCurr + x;
+					var m = Math.sqrt(gx * gx + gy * gy);
+					mag[p] = m;
 
-				if(useThinning){
-					var angle = Math.atan2(gy, gx) * (180 / Math.PI);
-					var a = angle < 0 ? angle + 180 : angle;
-					if((a >= 0 && a < 22.5) || (a >= 157.5 && a <= 180)) dir[p] = 0;
-					else if(a >= 22.5 && a < 67.5) dir[p] = 1;
-					else if(a >= 67.5 && a < 112.5) dir[p] = 2;
-					else dir[p] = 3;
+					if(useThinning){
+						var angle = Math.atan2(gy, gx) * (180 / Math.PI);
+						var a = angle < 0 ? angle + 180 : angle;
+						if((a >= 0 && a < 22.5) || (a >= 157.5 && a <= 180)) dir[p] = 0;
+						else if(a >= 22.5 && a < 67.5) dir[p] = 1;
+						else if(a >= 67.5 && a < 112.5) dir[p] = 2;
+						else dir[p] = 3;
+					}
 				}
 			}
-		}
 
-		// 4. Thresholding with optional Non-Maximum Suppression (1px Thinning)
-		var edges = new Uint8Array(total);
+			// 4. Thresholding with optional Non-Maximum Suppression (1px Thinning)
+			edges = new Uint8Array(total);
 
-		for(var y = 1; y < h - 1; y++){
-			var rCurr = y * w;
-			for(var x = 1; x < w - 1; x++){
-				var p = rCurr + x;
-				var m = mag[p];
-				if(m >= sensitivity){
-					if(useThinning){
-						var q = 0, r = 0;
-						var dVal = dir[p];
-						if(dVal === 0){ q = mag[p + 1]; r = mag[p - 1]; }
-						else if(dVal === 1){ q = mag[p - w + 1]; r = mag[p + w - 1]; }
-						else if(dVal === 2){ q = mag[p - w]; r = mag[p + w]; }
-						else if(dVal === 3){ q = mag[p - w - 1]; r = mag[p + w + 1]; }
+			for(var y = 1; y < h - 1; y++){
+				var rCurr = y * w;
+				for(var x = 1; x < w - 1; x++){
+					var p = rCurr + x;
+					var m = mag[p];
+					if(m >= sensitivity){
+						if(useThinning){
+							var q = 0, r = 0;
+							var dVal = dir[p];
+							if(dVal === 0){ q = mag[p + 1]; r = mag[p - 1]; }
+							else if(dVal === 1){ q = mag[p - w + 1]; r = mag[p + w - 1]; }
+							else if(dVal === 2){ q = mag[p - w]; r = mag[p + w]; }
+							else if(dVal === 3){ q = mag[p - w - 1]; r = mag[p + w + 1]; }
 
-						if(m >= q && m >= r){
+							if(m >= q && m >= r){
+								edges[p] = 1;
+							}
+						}else{
 							edges[p] = 1;
 						}
-					}else{
+					}
+				}
+			}
+
+			// Dark line art stroke (e.g. wireframes like Frame 34)
+			for(var y = 0; y < h; y++){
+				var rCurr = y * w;
+				for(var x = 0; x < w; x++){
+					var p = rCurr + x;
+					var idx = p * 4;
+					if(d[idx+3] < 32) continue;
+					if(d[idx] < 128 && d[idx+1] < 128 && d[idx+2] < 128){
 						edges[p] = 1;
 					}
 				}
 			}
 		}
 
-		// 5. Alpha boundaries & Dark stroke lines (wireframes)
+		// 5. Alpha boundaries & Color quantization boundaries
 		for(var y = 0; y < h; y++){
 			var rCurr = y * w;
 			var rPrev = (y > 0 ? y - 1 : y) * w;
@@ -1830,12 +1851,6 @@ function ImageTracer(){
 				var a = d[idx+3];
 
 				if(a < 32) continue; // transparent pixel
-
-				// Dark line art stroke (e.g. wireframes like Frame 34)
-				if(d[idx] < 128 && d[idx+1] < 128 && d[idx+2] < 128){
-					edges[p] = 1;
-					continue;
-				}
 
 				// Alpha boundary transition (transparent next to opaque)
 				if(x > 0 && d[(rCurr + x - 1)*4 + 3] < 32){ edges[p] = 1; continue; }
@@ -1853,7 +1868,7 @@ function ImageTracer(){
 		}
 
 		// 6. Morphological Gap Closing (bridge broken line segments to prevent flood-fill leaks)
-		if(gapClose > 0){
+		if(gapClose > 0 && options.useedges !== false){
 			edges = _this.morphologicalClose(edges, w, h, gapClose);
 		}
 

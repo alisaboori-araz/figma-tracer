@@ -4,7 +4,9 @@ interface TraceOptions {
   layeringMode?: "hierarchical" | "sequential" | "cutout";
   edgeStyle?: "organic" | "geometric";
   useEdges?: boolean;
+  edgeEngine?: "classical" | "ai";
   edgeSensitivity?: number;
+  aiEdgeThreshold?: number;
   edgeBlur?: number;
   edgeGapClose?: number;
   edgeThinning?: boolean;
@@ -205,9 +207,13 @@ function normalizeOptions(options: TraceOptions): TraceOptions {
         : "hierarchical",
     edgeStyle: options.edgeStyle === "geometric" ? "geometric" : "organic",
     useEdges: Boolean(options.useEdges),
+    edgeEngine: options.edgeEngine === "ai" ? "ai" : "classical",
     edgeSensitivity: Number.isFinite(Number(options.edgeSensitivity))
       ? Math.max(1, Number(options.edgeSensitivity))
       : 35,
+    aiEdgeThreshold: Number.isFinite(Number(options.aiEdgeThreshold))
+      ? Math.max(0.01, Math.min(0.99, Number(options.aiEdgeThreshold)))
+      : 0.20,
     edgeBlur: Number.isFinite(Number(options.edgeBlur))
       ? Math.max(0, Number(options.edgeBlur))
       : 0,

@@ -391,18 +391,41 @@
           </div>
           <div id="edge-parameters" hidden>
             <div class="field">
-              <div class="field-head">
-                <label for="edge-sensitivity">Sobel Sensitivity</label>
-                <input id="edge-sensitivity-num" type="number" class="num-input" step="any" value="35" title="Lower = more sensitive (detects faint lines)" />
-              </div>
-              <input id="edge-sensitivity" type="range" min="5" max="100" step="1" value="35" />
+              <label for="edge-engine">Detection engine</label>
+              <select id="edge-engine">
+                <option value="classical" selected>Classical (Sobel + NMS centerline)</option>
+                <option value="ai">AI Neural (TEED - Semantic)</option>
+              </select>
             </div>
-            <div class="field">
-              <div class="field-head">
-                <label for="edge-blur">Noise Pre-Blur (px)</label>
-                <input id="edge-blur-num" type="number" class="num-input" step="any" value="0" title="Smooths texture grain before gradient" />
+            <div id="classical-edge-controls">
+              <div class="field">
+                <div class="field-head">
+                  <label for="edge-sensitivity">Sobel Sensitivity</label>
+                  <input id="edge-sensitivity-num" type="number" class="num-input" step="any" value="35" title="Lower = more sensitive (detects faint lines)" />
+                </div>
+                <input id="edge-sensitivity" type="range" min="5" max="100" step="1" value="35" />
               </div>
-              <input id="edge-blur" type="range" min="0" max="10" step="0.5" value="0" />
+              <div class="field">
+                <div class="field-head">
+                  <label for="edge-blur">Noise Pre-Blur (px)</label>
+                  <input id="edge-blur-num" type="number" class="num-input" step="any" value="0" title="Smooths texture grain before gradient" />
+                </div>
+                <input id="edge-blur" type="range" min="0" max="10" step="0.5" value="0" />
+              </div>
+              <div class="field check">
+                <label for="edge-thinning">1px Edge Thinning (NMS)</label>
+                <input id="edge-thinning" type="checkbox" checked />
+              </div>
+            </div>
+            <div id="ai-edge-controls" hidden>
+              <div class="field">
+                <div class="field-head">
+                  <label for="ai-threshold">AI Edge Confidence</label>
+                  <input id="ai-threshold-num" type="number" class="num-input" step="0.01" value="0.20" title="Cutoff for AI predicted contours (0.05 - 0.80)" />
+                </div>
+                <input id="ai-threshold" type="range" min="0.05" max="0.80" step="0.01" value="0.20" />
+              </div>
+              <p class="subtle" id="ai-status" style="margin-top:4px;color:#00e676;">⚡ TEED 58K Neural Edge Detector active (WebGL).</p>
             </div>
             <div class="field">
               <div class="field-head">
@@ -411,11 +434,7 @@
               </div>
               <input id="edge-gap-close" type="range" min="0" max="4" step="1" value="1" />
             </div>
-            <div class="field check">
-              <label for="edge-thinning">1px Edge Thinning (NMS)</label>
-              <input id="edge-thinning" type="checkbox" checked />
-            </div>
-            <p class="subtle" style="margin-top:6px;">Detects stroke wireframes &amp; contrast boundaries to isolate internal regions.</p>
+            <p class="subtle" style="margin-top:6px;">Detects stroke wireframes &amp; semantic boundaries to isolate internal regions.</p>
           </div>
         </section>
         <section class="section">
@@ -566,8 +585,11 @@
         layeringMode: $("layering-mode"),
         edgeStyle: $("edge-style"),
         useEdges: $("use-edges"),
+        edgeEngine: $("edge-engine"),
         edgeSensitivity: $("edge-sensitivity"),
         edgeSensitivityNum: $("edge-sensitivity-num"),
+        aiThreshold: $("ai-threshold"),
+        aiThresholdNum: $("ai-threshold-num"),
         edgeBlur: $("edge-blur"),
         edgeBlurNum: $("edge-blur-num"),
         edgeGapClose: $("edge-gap-close"),
@@ -636,7 +658,9 @@
           layeringMode: controls.layeringMode ? controls.layeringMode.value : "hierarchical",
           edgeStyle: controls.edgeStyle ? controls.edgeStyle.value : "organic",
           useEdges: controls.useEdges ? controls.useEdges.checked : false,
+          edgeEngine: controls.edgeEngine ? controls.edgeEngine.value : "classical",
           edgeSensitivity: controls.edgeSensitivityNum ? parseFloat(controls.edgeSensitivityNum.value) || 35 : 35,
+          aiEdgeThreshold: controls.aiThresholdNum ? Math.max(0.01, Math.min(0.99, parseFloat(controls.aiThresholdNum.value) || 0.20)) : 0.20,
           edgeBlur: controls.edgeBlurNum ? Math.max(0, parseFloat(controls.edgeBlurNum.value) || 0) : 0,
           edgeGapClose: controls.edgeGapCloseNum ? Math.max(0, Math.round(parseFloat(controls.edgeGapCloseNum.value) || 1)) : 1,
           edgeThinning: controls.edgeThinning ? controls.edgeThinning.checked : true,
@@ -792,11 +816,15 @@
         if (controls.layeringMode) controls.layeringMode.value = "hierarchical";
         if (controls.edgeStyle) controls.edgeStyle.value = "organic";
         if (controls.useEdges) controls.useEdges.checked = false;
+        if (controls.edgeEngine) controls.edgeEngine.value = "classical";
         if (controls.edgeSensitivity) { controls.edgeSensitivity.value = 35; controls.edgeSensitivityNum.value = 35; }
+        if (controls.aiThreshold) { controls.aiThreshold.value = 0.20; controls.aiThresholdNum.value = 0.20; }
         if (controls.edgeBlur) { controls.edgeBlur.value = 0; controls.edgeBlurNum.value = 0; }
         if (controls.edgeGapClose) { controls.edgeGapClose.value = 1; controls.edgeGapCloseNum.value = 1; }
         if (controls.edgeThinning) controls.edgeThinning.checked = true;
         if ($("edge-parameters")) $("edge-parameters").hidden = true;
+        if ($("classical-edge-controls")) $("classical-edge-controls").hidden = false;
+        if ($("ai-edge-controls")) $("ai-edge-controls").hidden = true;
         if ($("curve-algorithm-group")) $("curve-algorithm-group").hidden = false;
         controls.colors.value = 8; controls.colorsNum.value = 8;
         controls.kmeansCycles.value = 10; controls.kmeansCyclesNum.value = 10;
@@ -860,6 +888,16 @@
 
       function tracePrepared(prepared, settings) {
         const layeringVal = settings.layeringMode === "hierarchical" ? 2 : (settings.layeringMode === "cutout" ? 1 : 0);
+        let aiEdges = undefined;
+        if (settings.useEdges && settings.edgeEngine === "ai" && cachedAiRawEdge && cachedAiRawW === prepared.width && cachedAiRawH === prepared.height) {
+          const thresh = settings.aiEdgeThreshold !== undefined ? settings.aiEdgeThreshold : 0.20;
+          const total = prepared.width * prepared.height;
+          aiEdges = new Uint8Array(total);
+          for (let i = 0; i < total; i++) {
+            if (cachedAiRawEdge[i] > thresh) aiEdges[i] = 1;
+          }
+        }
+
         return ImageTracer.imagedataToTracedata(prepared.data, {
           numberofcolors: settings.mode === "bw" ? 2 : settings.numberofcolors,
           pal: settings.mode === "color" && settings.palette ? settings.palette.map(color => ({ ...color })) : undefined,
@@ -869,6 +907,7 @@
           edgestyle: settings.edgeStyle || "organic",
           hierarchical: settings.layeringMode === "hierarchical",
           useedges: !!settings.useEdges,
+          aiedges: aiEdges,
           edgesensitivity: settings.edgeSensitivity !== undefined ? settings.edgeSensitivity : 35,
           edgeblur: settings.edgeBlur !== undefined ? settings.edgeBlur : 0,
           edgegapclose: settings.edgeGapClose !== undefined ? settings.edgeGapClose : 1,
@@ -1017,23 +1056,132 @@
         }
       }
 
-      function renderEdgePreview() {
+      let ortSession = null;
+      let cachedAiRawEdge = null;
+      let cachedAiRawW = 0, cachedAiRawH = 0;
+
+      async function getTeedSession() {
+        if (ortSession) return ortSession;
+        if (typeof ort === "undefined") {
+          throw new Error("ONNX Runtime Web is not loaded in UI.");
+        }
+        if (typeof TEED_MODEL_BASE64 === "undefined") {
+          throw new Error("TEED model is not embedded in UI.");
+        }
+        try {
+          if (ort.env && ort.env.wasm) ort.env.wasm.numThreads = 1;
+        } catch (_) {}
+
+        const binaryStr = atob(TEED_MODEL_BASE64);
+        const len = binaryStr.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+          bytes[i] = binaryStr.charCodeAt(i);
+        }
+
+        try {
+          ortSession = await ort.InferenceSession.create(bytes.buffer, {
+            executionProviders: ["webgl", "wasm", "cpu"]
+          });
+          if ($("ai-status")) $("ai-status").textContent = "⚡ TEED 58K Neural Edge Detector active (WebGL).";
+        } catch (e) {
+          console.warn("WebGL EP not available, falling back to default:", e);
+          ortSession = await ort.InferenceSession.create(bytes.buffer);
+          if ($("ai-status")) $("ai-status").textContent = "⚡ TEED 58K Neural Edge Detector active (WASM/CPU).";
+        }
+        return ortSession;
+      }
+
+      async function runAiEdgeInference(preparedData, width, height) {
+        if (cachedAiRawEdge && cachedAiRawW === width && cachedAiRawH === height) {
+          return cachedAiRawEdge;
+        }
+        const session = await getTeedSession();
+        const padW = Math.ceil(width / 16) * 16;
+        const padH = Math.ceil(height / 16) * 16;
+        const totalPad = padW * padH;
+        const inputData = new Float32Array(3 * totalPad);
+        const d = preparedData;
+        const meanB = 103.939, meanG = 116.779, meanR = 123.68;
+        const planeSize = totalPad;
+
+        for (let y = 0; y < height; y++) {
+          const rowSrc = y * width;
+          const rowDst = y * padW;
+          for (let x = 0; x < width; x++) {
+            const srcIdx = (rowSrc + x) * 4;
+            const dstIdx = rowDst + x;
+            inputData[dstIdx] = d[srcIdx + 2] - meanB;                 // B
+            inputData[planeSize + dstIdx] = d[srcIdx + 1] - meanG;      // G
+            inputData[2 * planeSize + dstIdx] = d[srcIdx] - meanR;      // R
+          }
+        }
+
+        const tensor = new ort.Tensor("float32", inputData, [1, 3, padH, padW]);
+        const feeds = {};
+        feeds[session.inputNames[0]] = tensor;
+
+        const results = await session.run(feeds);
+        const outTensor = results[session.outputNames[0]];
+        const raw = outTensor.data;
+
+        let minVal = Infinity, maxVal = -Infinity;
+        for (let y = 0; y < height; y++) {
+          const row = y * padW;
+          for (let x = 0; x < width; x++) {
+            const v = raw[row + x];
+            if (v < minVal) minVal = v;
+            if (v > maxVal) maxVal = v;
+          }
+        }
+
+        const range = (maxVal - minVal) > 1e-5 ? (maxVal - minVal) : 1;
+        const normEdge = new Float32Array(width * height);
+        for (let y = 0; y < height; y++) {
+          const rowSrc = y * padW;
+          const rowDst = y * width;
+          for (let x = 0; x < width; x++) {
+            normEdge[rowDst + x] = (raw[rowSrc + x] - minVal) / range;
+          }
+        }
+
+        cachedAiRawEdge = normEdge;
+        cachedAiRawW = width;
+        cachedAiRawH = height;
+        return normEdge;
+      }
+
+      async function renderEdgePreview() {
         drawBackground();
         if (!sourceImage) return;
         try {
           const settings = options();
           const prepared = preprocess(sourceImage, settings, settings.traceScalePercent);
           const fit = fitting(prepared.width, prepared.height);
-
-          const edgeMap = ImageTracer.detectEdgeMap(prepared.data, null, {
-            edgesensitivity: settings.edgeSensitivity,
-            edgeblur: settings.edgeBlur,
-            edgegapclose: settings.edgeGapClose,
-            edgethinning: settings.edgeThinning
-          });
-
           const w = prepared.width, h = prepared.height;
           const total = w * h;
+          let edgeMap = null;
+
+          if (settings.useEdges && settings.edgeEngine === "ai") {
+            if ($("edge-stats")) $("edge-stats").textContent = "AI neural inferring...";
+            const rawProb = await runAiEdgeInference(prepared.data.data, w, h);
+            const thresh = settings.aiEdgeThreshold !== undefined ? settings.aiEdgeThreshold : 0.20;
+            const aiEdges = new Uint8Array(total);
+            for (let i = 0; i < total; i++) {
+              if (rawProb[i] > thresh) aiEdges[i] = 1;
+            }
+            edgeMap = ImageTracer.detectEdgeMap(prepared.data, null, {
+              aiedges: aiEdges,
+              edgegapclose: settings.edgeGapClose
+            });
+          } else {
+            edgeMap = ImageTracer.detectEdgeMap(prepared.data, null, {
+              edgesensitivity: settings.edgeSensitivity,
+              edgeblur: settings.edgeBlur,
+              edgegapclose: settings.edgeGapClose,
+              edgethinning: settings.edgeThinning
+            });
+          }
 
           let edgeCount = 0;
           for (let i = 0; i < total; i++) {
@@ -1041,7 +1189,8 @@
           }
           const edgePct = total > 0 ? ((edgeCount / total) * 100).toFixed(1) : "0.0";
           if ($("edge-stats")) {
-            $("edge-stats").textContent = `${edgeCount.toLocaleString()} edge px (${edgePct}%)`;
+            const engineTag = settings.edgeEngine === "ai" ? " (AI)" : "";
+            $("edge-stats").textContent = `${edgeCount.toLocaleString()} edge px (${edgePct}%)${engineTag}`;
           }
 
           const edgeCanvas = document.createElement("canvas");
@@ -1100,7 +1249,7 @@
         }
       }
 
-      function renderPreview() {
+      async function renderPreview() {
         drawBackground();
         if (!sourceImage) return;
         try {
@@ -1116,6 +1265,11 @@
             previewContext.globalAlpha = .3;
             drawImagePreview(prepared, fit);
             previewContext.globalAlpha = 1;
+          }
+          if (settings.useEdges && settings.edgeEngine === "ai" && (!cachedAiRawEdge || cachedAiRawW !== prepared.width || cachedAiRawH !== prepared.height)) {
+            setStatus("Running AI edge detector…");
+            await runAiEdgeInference(prepared.data.data, prepared.width, prepared.height);
+            setStatus("Ready to trace");
           }
           if (!cachedTrace) {
             cachedTrace = tracePrepared(prepared, settings);
@@ -1145,6 +1299,7 @@ self.onmessage = function(event) {
     const job = event.data;
     self.postMessage({ type: "progress", requestId: job.requestId, percent: 55, label: "Tracing contours…" });
     const layeringVal = job.settings.layeringMode === "hierarchical" ? 2 : (job.settings.layeringMode === "cutout" ? 1 : 0);
+    const aiEdges = job.aiEdges ? new Uint8Array(job.aiEdges) : undefined;
     const tracedata = ImageTracer.imagedataToTracedata(
       { data: new Uint8ClampedArray(job.buffer), width: job.width, height: job.height },
       {
@@ -1156,6 +1311,7 @@ self.onmessage = function(event) {
         edgestyle: job.settings.edgeStyle || "organic",
         hierarchical: job.settings.layeringMode === "hierarchical",
         useedges: !!job.settings.useEdges,
+        aiedges: aiEdges,
         edgesensitivity: job.settings.edgeSensitivity !== undefined ? job.settings.edgeSensitivity : 35,
         edgeblur: job.settings.edgeBlur !== undefined ? job.settings.edgeBlur : 0,
         edgegapclose: job.settings.edgeGapClose !== undefined ? job.settings.edgeGapClose : 1,
@@ -1241,15 +1397,40 @@ self.onmessage = function(event) {
 
       async function traceImage(message) {
         try {
-          setProgress(25, "Preparing image…");
+          setProgress(20, "Preparing image…");
           const image = await loadImage(message.bytes instanceof Uint8Array ? message.bytes : new Uint8Array(message.bytes));
           const prepared = preprocess(image, message.options, message.options.traceScalePercent);
+
+          let aiEdgeBuffer = undefined;
+          if (message.options.useEdges && message.options.edgeEngine === "ai") {
+            setProgress(30, "Running AI edge detector…");
+            const rawProb = await runAiEdgeInference(prepared.data.data, prepared.width, prepared.height);
+            const thresh = message.options.aiEdgeThreshold !== undefined ? message.options.aiEdgeThreshold : 0.20;
+            const total = prepared.width * prepared.height;
+            const aiEdges = new Uint8Array(total);
+            for (let i = 0; i < total; i++) {
+              if (rawProb[i] > thresh) aiEdges[i] = 1;
+            }
+            aiEdgeBuffer = aiEdges.buffer;
+          }
+
           const worker = getTraceWorker();
           const requestId = ++traceRequestId;
-          setProgress(40, "Tracing image in background…");
+          setProgress(45, "Tracing image in background…");
+          const transferables = [prepared.data.data.buffer];
+          if (aiEdgeBuffer) transferables.push(aiEdgeBuffer);
+
           worker.postMessage(
-            { requestId, buffer: prepared.data.data.buffer, width: prepared.width, height: prepared.height, settings: message.options, isSequence: false },
-            [prepared.data.data.buffer]
+            {
+              requestId,
+              buffer: prepared.data.data.buffer,
+              aiEdges: aiEdgeBuffer,
+              width: prepared.width,
+              height: prepared.height,
+              settings: message.options,
+              isSequence: false
+            },
+            transferables
           );
         } catch (error) {
           setProgress(null);
@@ -1261,23 +1442,41 @@ self.onmessage = function(event) {
 
       async function traceSequenceImage(message) {
         try {
-          setProgress(25, "Preparing image for sequence…");
+          setProgress(20, "Preparing image for sequence…");
           const image = await loadImage(message.bytes instanceof Uint8Array ? message.bytes : new Uint8Array(message.bytes));
           const prepared = preprocess(image, message.options, message.options.traceScalePercent);
+
+          let aiEdgeBuffer = undefined;
+          if (message.options.useEdges && message.options.edgeEngine === "ai") {
+            setProgress(30, "Running AI edge detector…");
+            const rawProb = await runAiEdgeInference(prepared.data.data, prepared.width, prepared.height);
+            const thresh = message.options.aiEdgeThreshold !== undefined ? message.options.aiEdgeThreshold : 0.20;
+            const total = prepared.width * prepared.height;
+            const aiEdges = new Uint8Array(total);
+            for (let i = 0; i < total; i++) {
+              if (rawProb[i] > thresh) aiEdges[i] = 1;
+            }
+            aiEdgeBuffer = aiEdges.buffer;
+          }
+
           const worker = getTraceWorker();
           const requestId = ++traceRequestId;
-          setProgress(40, "Tracing progressive sequence…");
+          setProgress(45, "Tracing progressive sequence…");
+          const transferables = [prepared.data.data.buffer];
+          if (aiEdgeBuffer) transferables.push(aiEdgeBuffer);
+
           worker.postMessage(
             {
               requestId,
               buffer: prepared.data.data.buffer,
+              aiEdges: aiEdgeBuffer,
               width: prepared.width,
               height: prepared.height,
               settings: message.options,
               isSequence: true,
               stepCount: message.stepCount || 6
             },
-            [prepared.data.data.buffer]
+            transferables
           );
         } catch (error) {
           setProgress(null);
@@ -1325,7 +1524,7 @@ self.onmessage = function(event) {
       }
 
       // Connect synchronization for all numeric pairs
-      syncPair(controls.blur, controls.blurNum, false, schedulePreview);
+      syncPair(controls.blur, controls.blurNum, false, () => { cachedAiRawEdge = null; schedulePreview(); });
       syncPair(controls.threshold, controls.thresholdNum, false, schedulePreview);
       syncPair(controls.colors, controls.colorsNum, false, () => { extractPalette(); labels(); schedulePreview(); });
       syncPair(controls.kmeansCycles, controls.kmeansCyclesNum, false, () => { extractPalette(); labels(); schedulePreview(); });
@@ -1371,7 +1570,16 @@ self.onmessage = function(event) {
         if ($("edge-parameters")) $("edge-parameters").hidden = !controls.useEdges.checked;
         schedulePreview();
       });
+      if (controls.edgeEngine) {
+        controls.edgeEngine.addEventListener("change", () => {
+          const isAi = controls.edgeEngine.value === "ai";
+          if ($("classical-edge-controls")) $("classical-edge-controls").hidden = isAi;
+          if ($("ai-edge-controls")) $("ai-edge-controls").hidden = !isAi;
+          schedulePreview();
+        });
+      }
       syncPair(controls.edgeSensitivity, controls.edgeSensitivityNum, false, schedulePreview);
+      syncPair(controls.aiThreshold, controls.aiThresholdNum, true, schedulePreview);
       syncPair(controls.edgeBlur, controls.edgeBlurNum, true, schedulePreview);
       syncPair(controls.edgeGapClose, controls.edgeGapCloseNum, false, schedulePreview);
       controls.edgeThinning.addEventListener("change", schedulePreview);
@@ -1420,7 +1628,10 @@ self.onmessage = function(event) {
       controls.showPath.addEventListener("change", renderCurrentView);
       controls.showPoints.addEventListener("change", renderCurrentView);
       controls.fadeImage.addEventListener("change", renderCurrentView);
-      controls.invert.addEventListener("change", schedulePreview);
+      controls.invert.addEventListener("change", () => {
+        cachedAiRawEdge = null;
+        schedulePreview();
+      });
 
       previewCanvas.addEventListener("wheel", zoomPreview, { passive: false });
       previewCanvas.addEventListener("dblclick", resetPreviewZoom);
@@ -1542,6 +1753,9 @@ self.onmessage = function(event) {
             previewZoom = 1; previewPanX = 0; previewPanY = 0;
             palette = null;
             previewLayerStep = null;
+            cachedAiRawEdge = null;
+            cachedAiRawW = 0;
+            cachedAiRawH = 0;
             stopSequencePlay();
             extractPalette();
             labels();
@@ -1551,6 +1765,9 @@ self.onmessage = function(event) {
           }
         } else if (message.type === "NO_SELECTION") {
           sourceImage = null;
+          cachedAiRawEdge = null;
+          cachedAiRawW = 0;
+          cachedAiRawH = 0;
           setStatus("Select any layer on canvas to trace.");
           drawBackground();
         } else if (message.type === "TRACE_IMAGE") {
