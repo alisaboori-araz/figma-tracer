@@ -5,6 +5,9 @@ interface TraceOptions {
   edgeStyle?: "organic" | "geometric";
   useEdges?: boolean;
   edgeSensitivity?: number;
+  edgeBlur?: number;
+  edgeGapClose?: number;
+  edgeThinning?: boolean;
   curveAlgorithm?: "potrace" | "standard";
   smoothSteps?: number;
   alphaMax?: number;
@@ -205,6 +208,13 @@ function normalizeOptions(options: TraceOptions): TraceOptions {
     edgeSensitivity: Number.isFinite(Number(options.edgeSensitivity))
       ? Math.max(1, Number(options.edgeSensitivity))
       : 35,
+    edgeBlur: Number.isFinite(Number(options.edgeBlur))
+      ? Math.max(0, Number(options.edgeBlur))
+      : 0,
+    edgeGapClose: Number.isFinite(Number(options.edgeGapClose))
+      ? Math.max(0, Math.round(Number(options.edgeGapClose)))
+      : 1,
+    edgeThinning: options.edgeThinning !== undefined ? Boolean(options.edgeThinning) : true,
     curveAlgorithm: options.curveAlgorithm === "standard" ? "standard" : "potrace",
     smoothSteps: Number.isFinite(Number(options.smoothSteps))
       ? Math.max(0, Math.round(Number(options.smoothSteps)))

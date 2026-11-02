@@ -179,6 +179,9 @@ function ImageTracer(){
 			edgestyle : 'organic',
 			hierarchical : false,
 			edgesensitivity : 35,
+			edgeblur : 0,
+			edgegapclose : 1,
+			edgethinning : true,
 			minregionarea : 4,
 			smoothsteps : 2,
 			alphamax : 1.0,
@@ -1652,62 +1655,206 @@ function ImageTracer(){
 		return smp;
 	};
 
+	// Fast separable box blur on 1D grayscale buffer (O(1) per pixel)
+	this.boxBlurGrayscale = function(gray, w, h, radius){
+		if(radius <= 0) return gray;
+		var r = Math.min(10, Math.round(radius));
+		var total = w * h;
+		var tmp = new Uint8Array(total);
+		var out = new Uint8Array(total);
+		var div = 2 * r + 1;
+
+		// Horizontal pass
+		for(var y = 0; y < h; y++){
+			var row = y * w;
+			var acc = 0;
+			for(var k = -r; k <= r; k++){
+				acc += gray[row + Math.max(0, Math.min(w - 1, k))];
+			}
+			for(var x = 0; x < w; x++){
+				tmp[row + x] = (acc / div) | 0;
+				acc += gray[row + Math.min(w - 1, x + r + 1)] - gray[row + Math.max(0, x - r)];
+			}
+		}
+
+		// Vertical pass
+		for(var x = 0; x < w; x++){
+			var acc = 0;
+			for(var k = -r; k <= r; k++){
+				acc += tmp[Math.max(0, Math.min(h - 1, k)) * w + x];
+			}
+			for(var y = 0; y < h; y++){
+				out[y * w + x] = (acc / div) | 0;
+				acc += tmp[Math.min(h - 1, y + r + 1) * w + x] - tmp[Math.max(0, y - r) * w + x];
+			}
+		}
+		return out;
+	};
+
+	// Morphological closing: Dilation followed by Erosion to bridge line gaps of length <= 2*radius
+	this.morphologicalClose = function(edges, w, h, radius){
+		if(radius <= 0) return edges;
+		var rad = Math.min(4, Math.round(radius));
+		var total = w * h;
+
+		// 1. Dilation
+		var dil = new Uint8Array(total);
+		for(var y = 0; y < h; y++){
+			var row = y * w;
+			for(var x = 0; x < w; x++){
+				if(edges[row + x] === 1){
+					for(var dy = -rad; dy <= rad; dy++){
+						var ny = y + dy;
+						if(ny < 0 || ny >= h) continue;
+						var nrow = ny * w;
+						for(var dx = -rad; dx <= rad; dx++){
+							var nx = x + dx;
+							if(nx < 0 || nx >= w) continue;
+							dil[nrow + nx] = 1;
+						}
+					}
+				}
+			}
+		}
+
+		// 2. Erosion
+		var ero = new Uint8Array(total);
+		for(var y = 0; y < h; y++){
+			var row = y * w;
+			for(var x = 0; x < w; x++){
+				if(dil[row + x] === 1){
+					var allOne = true;
+					for(var dy = -rad; dy <= rad; dy++){
+						var ny = y + dy;
+						if(ny < 0 || ny >= h) continue;
+						var nrow = ny * w;
+						for(var dx = -rad; dx <= rad; dx++){
+							var nx = x + dx;
+							if(nx < 0 || nx >= w) continue;
+							if(dil[nrow + nx] === 0){ allOne = false; break; }
+						}
+						if(!allOne) break;
+					}
+					if(allOne) ero[row + x] = 1;
+				}
+			}
+		}
+		return ero;
+	};
+
 	// Edge network detector: captures line strokes, alpha contours, color boundaries, and contrast gradients
 	this.detectEdgeMap = function(imgd, ii, options){
+		options = options || {};
 		var w = imgd.width, h = imgd.height, d = imgd.data;
 		var total = w * h;
-		var edges = new Uint8Array(total);
 		var sensitivity = options.edgesensitivity !== undefined ? Number(options.edgesensitivity) : 35;
+		var edgeBlur = options.edgeblur !== undefined ? Number(options.edgeblur) : 0;
+		var gapClose = options.edgegapclose !== undefined ? Number(options.edgegapclose) : 1;
+		var useThinning = options.edgethinning !== undefined ? Boolean(options.edgethinning) : true;
 
+		// 1. Convert to grayscale luminance
+		var gray = new Uint8Array(total);
+		for(var i = 0; i < total; i++){
+			var idx = i * 4;
+			gray[i] = (d[idx] * 0.299 + d[idx+1] * 0.587 + d[idx+2] * 0.114) | 0;
+		}
+
+		// 2. Pre-blur if specified
+		if(edgeBlur > 0){
+			gray = _this.boxBlurGrayscale(gray, w, h, edgeBlur);
+		}
+
+		// 3. Sobel gradient magnitude & angle
+		var mag = new Float32Array(total);
+		var dir = new Uint8Array(total);
+
+		for(var y = 1; y < h - 1; y++){
+			var rPrev = (y - 1) * w;
+			var rCurr = y * w;
+			var rNext = (y + 1) * w;
+			for(var x = 1; x < w - 1; x++){
+				var gx = (gray[rPrev + x + 1] + 2*gray[rCurr + x + 1] + gray[rNext + x + 1]) -
+				         (gray[rPrev + x - 1] + 2*gray[rCurr + x - 1] + gray[rNext + x - 1]);
+				var gy = (gray[rNext + x - 1] + 2*gray[rNext + x] + gray[rNext + x + 1]) -
+				         (gray[rPrev + x - 1] + 2*gray[rPrev + x] + gray[rPrev + x + 1]);
+				var p = rCurr + x;
+				var m = Math.sqrt(gx * gx + gy * gy);
+				mag[p] = m;
+
+				if(useThinning){
+					var angle = Math.atan2(gy, gx) * (180 / Math.PI);
+					var a = angle < 0 ? angle + 180 : angle;
+					if((a >= 0 && a < 22.5) || (a >= 157.5 && a <= 180)) dir[p] = 0;
+					else if(a >= 22.5 && a < 67.5) dir[p] = 1;
+					else if(a >= 67.5 && a < 112.5) dir[p] = 2;
+					else dir[p] = 3;
+				}
+			}
+		}
+
+		// 4. Thresholding with optional Non-Maximum Suppression (1px Thinning)
+		var edges = new Uint8Array(total);
+
+		for(var y = 1; y < h - 1; y++){
+			var rCurr = y * w;
+			for(var x = 1; x < w - 1; x++){
+				var p = rCurr + x;
+				var m = mag[p];
+				if(m >= sensitivity){
+					if(useThinning){
+						var q = 0, r = 0;
+						var dVal = dir[p];
+						if(dVal === 0){ q = mag[p + 1]; r = mag[p - 1]; }
+						else if(dVal === 1){ q = mag[p - w + 1]; r = mag[p + w - 1]; }
+						else if(dVal === 2){ q = mag[p - w]; r = mag[p + w]; }
+						else if(dVal === 3){ q = mag[p - w - 1]; r = mag[p + w + 1]; }
+
+						if(m >= q && m >= r){
+							edges[p] = 1;
+						}
+					}else{
+						edges[p] = 1;
+					}
+				}
+			}
+		}
+
+		// 5. Alpha boundaries & Dark stroke lines (wireframes)
 		for(var y = 0; y < h; y++){
 			var rCurr = y * w;
 			var rPrev = (y > 0 ? y - 1 : y) * w;
 			var rNext = (y < h - 1 ? y + 1 : y) * w;
 			for(var x = 0; x < w; x++){
-				var idx = (rCurr + x) * 4;
-				var r = d[idx], g = d[idx+1], b = d[idx+2], a = d[idx+3];
+				var p = rCurr + x;
+				var idx = p * 4;
+				var a = d[idx+3];
 
-				// Transparent pixel is not an edge itself
-				if(a < 32) continue;
+				if(a < 32) continue; // transparent pixel
 
-				// 1. Dark line art stroke (e.g. wireframes, drawings)
-				if(r < 128 && g < 128 && b < 128){
-					edges[rCurr + x] = 1;
+				// Dark line art stroke (e.g. wireframes like Frame 34)
+				if(d[idx] < 128 && d[idx+1] < 128 && d[idx+2] < 128){
+					edges[p] = 1;
 					continue;
 				}
 
-				// 2. Alpha edge boundary (transparent vs opaque boundary)
-				if(x > 0 && d[(rCurr + x - 1)*4 + 3] < 32){ edges[rCurr + x] = 1; continue; }
-				if(x < w - 1 && d[(rCurr + x + 1)*4 + 3] < 32){ edges[rCurr + x] = 1; continue; }
-				if(y > 0 && d[(rPrev + x)*4 + 3] < 32){ edges[rCurr + x] = 1; continue; }
-				if(y < h - 1 && d[(rNext + x)*4 + 3] < 32){ edges[rCurr + x] = 1; continue; }
+				// Alpha boundary transition (transparent next to opaque)
+				if(x > 0 && d[(rCurr + x - 1)*4 + 3] < 32){ edges[p] = 1; continue; }
+				if(x < w - 1 && d[(rCurr + x + 1)*4 + 3] < 32){ edges[p] = 1; continue; }
+				if(y > 0 && d[(rPrev + x)*4 + 3] < 32){ edges[p] = 1; continue; }
+				if(y < h - 1 && d[(rNext + x)*4 + 3] < 32){ edges[p] = 1; continue; }
 
-				// 3. Sobel gradient magnitude on luminance
-				if(sensitivity > 0 && x > 0 && x < w - 1 && y > 0 && y < h - 1){
-					var idx00 = (rPrev + x - 1) * 4;
-					var idx02 = (rPrev + x + 1) * 4;
-					var idx10 = (rCurr + x - 1) * 4;
-					var idx12 = (rCurr + x + 1) * 4;
-					var idx20 = (rNext + x - 1) * 4;
-					var idx22 = (rNext + x + 1) * 4;
-
-					var gx = (d[idx02] + 2*d[idx12] + d[idx22]) - (d[idx00] + 2*d[idx10] + d[idx20]);
-					var gy = (d[idx20] + 2*d[(rNext + x)*4] + d[idx22]) - (d[idx00] + 2*d[(rPrev + x)*4] + d[idx02]);
-
-					var mag = (Math.abs(gx) + Math.abs(gy)) * 0.25;
-					if(mag > sensitivity){
-						edges[rCurr + x] = 1;
-						continue;
-					}
-				}
-
-				// 4. Color quantization boundary from indexed image ii
+				// Color quantization boundary from ii (if available)
 				if(ii && ii.array){
 					var cCurr = ii.array[y + 1][x + 1];
-					if(x < w - 1 && ii.array[y + 1][x + 2] !== cCurr){ edges[rCurr + x] = 1; continue; }
-					if(y < h - 1 && ii.array[y + 2][x + 1] !== cCurr){ edges[rCurr + x] = 1; continue; }
+					if(x < w - 1 && ii.array[y + 1][x + 2] !== cCurr){ edges[p] = 1; continue; }
+					if(y < h - 1 && ii.array[y + 2][x + 1] !== cCurr){ edges[p] = 1; continue; }
 				}
 			}
+		}
+
+		// 6. Morphological Gap Closing (bridge broken line segments to prevent flood-fill leaks)
+		if(gapClose > 0){
+			edges = _this.morphologicalClose(edges, w, h, gapClose);
 		}
 
 		return edges;
