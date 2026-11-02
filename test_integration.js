@@ -131,8 +131,8 @@ const ort = require(path.join(__dirname, "node_modules", "onnxruntime-web"));
     console.log("   Inputs:", session.inputNames);
     console.log("   Outputs:", session.outputNames);
 
-    // Run inference on 64x64 tensor (padded to multiple of 16, which is 64)
-    const inputTensor = new ort.Tensor("float32", new Float32Array(1 * 3 * 64 * 64), [1, 3, 64, 64]);
+    // Run inference on canonical 256x256 tensor
+    const inputTensor = new ort.Tensor("float32", new Float32Array(1 * 3 * 256 * 256), [1, 3, 256, 256]);
     const feeds = {};
     feeds[session.inputNames[0]] = inputTensor;
     const t0 = Date.now();
